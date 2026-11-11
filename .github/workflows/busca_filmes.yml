@@ -1,0 +1,220 @@
+name: Buscar Filmes (Tokyvideo & TankieTube)
+
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: 'Nome do filme para buscar'
+        required: true
+        default: 'matrix'
+  schedule:
+    - cron: '0 12 * * *'
+
+# Permissão para o GITHUB_TOKEN poder commitar no repositório
+permissions:
+  contents: write
+
+jobs:
+  buscar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependências
+        run: pip install requests beautifulsoup4
+
+      - name: Criar script de busca
+        run: |
+          cat << 'PYEOF' > busca.py
+          import os
+          import re
+          import json
+          import unicodedata
+          import requests
+          from bs4 import BeautifulSoup
+          from html import escape as html_escape
+
+          def slugify(text):
+              text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+              text = re.sub(r"[^\w\s-]", "", text).strip().lower()
+              text = re.sub(r"[-\s]+", "-", text)
+              return text[:80] or "video"
+
+          def gerar_html(titulo, thumb, link, outdir):
+              os.makedirs(outdir, exist_ok=True)
+              slug = slugify(titulo)
+              filename = os.path.join(outdir, slug + ".html")
+
+              json_ld = {
+                  "@context": "https://schema.org",
+                  "@type": "VideoObject",
+                  "supportPlatform": ["https://schema.org/IOSPlatform", "https://schema.org/AndroidPlatform"],
+                  "name": titulo,
+                  "description": "Assista " + titulo,
+                  "thumbnailUrl": [thumb] if thumb else [],
+                  "contentUrl": link,
+              }
+              json_ld_str = json.dumps(json_ld, ensure_ascii=False, indent=2)
+              title_esc = html_escape(titulo)
+              thumb_esc = html_escape(thumb)
+              link_esc = html_escape(link)
+
+              template = """<!DOCTYPE html>
+          <html lang="pt-BR">
+          <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <script type="application/ld+json">
+          {json_ld}
+          </script>
+          <title>{title}</title>
+          <style>
+            body {{ background: #000; color: #fff; font-family: sans-serif; margin: 0; padding: 20px; }}
+            h1 {{ font-size: 24px; text-align: center; margin-bottom: 30px; }}
+          </style>
+          </head>
+          <body>
+
+          <h1>{title}</h1>
+
+          <div style="background: #0b0b12; border-radius:20px; overflow:hidden; box-shadow:0 25px 60px rgba(0,0,0,.8); margin:25px 0; border:1px solid rgba(255,255,255,.06);">
+
+            <a href="{link}" target="_blank" style="display: block; position: relative; text-decoration: none;">
+
+              <img src="{thumb}" style="width:100%; display:block;">
+
+              <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(0,0,0,0.7), transparent);"></div>
+
+              <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); width:70px; height:70px; background:linear-gradient(135deg,#7a00ff,#c000ff); border-radius:50%; display:flex; align-items:center; justify-content:center; box-shadow:0 0 20px rgba(120,0,255,.6); color:white; font-size:26px; border:2px solid rgba(255,255,255,.2);">▶</div>
+
+              <div style="position:absolute; top:12px; right:12px; background:#ff003c; padding:6px 12px; border-radius:20px; font-size:11px; color:#fff; font-weight:bold;">HD</div>
+            </a>
+
+          </div>
+
+          </body>
+          </html>
+          """
+              content = template.format(json_ld=json_ld_str, title=title_esc, link=link_esc, thumb=thumb_esc)
+              with open(filename, "w", encoding="utf-8") as f:
+                  f.write(content)
+              return filename
+
+          def buscar_tankietube(query, outdir):
+              url = "https://tankie.tube/api/v1/search/videos"
+              params = {"search": query, "count": 10}
+              print("\n=== Tankie.Tube ===")
+              try:
+                  resp = requests.get(url, params=params, timeout=20)
+                  resp.raise_for_status()
+                  data = resp.json()
+                  videos = data.get("data", [])
+                  print(str(len(videos)) + " resultado(s) encontrados")
+                  for v in videos:
+                      name = v.get("name", "")
+                      link = v.get("url") or ("https://tankie.tube/w/" + v.get("shortUUID", ""))
+                      thumb_path = v.get("thumbnailPath") or v.get("previewPath") or ""
+                      thumb = "https://tankie.tube" + thumb_path if thumb_path else ""
+                      if name and link:
+                          f = gerar_html(name, thumb, link, outdir)
+                          print("  -> " + f)
+              except Exception as e:
+                  print("[ERRO] " + str(e))
+
+          def buscar_tokyvideo(query, outdir):
+              print("\n=== Tokyvideo ===")
+              url = "https://www.tokyvideo.com/search"
+              headers = {
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+              }
+              try:
+                  resp = requests.get(url, params={"q": query}, headers=headers, timeout=20)
+                  resp.raise_for_status()
+                  soup = BeautifulSoup(resp.text, "html.parser")
+
+                  vistos = set()
+                  count = 0
+                  for a in soup.find_all("a", href=True):
+                      href = a.get("href", "")
+                      if "/video/" not in href:
+                          continue
+                      if href.startswith("/"):
+                          href = "https://www.tokyvideo.com" + href
+                      elif not href.startswith("http"):
+                          continue
+                      if href in vistos:
+                          continue
+                      vistos.add(href)
+
+                      titulo = a.get("title") or a.get_text(strip=True)
+                      if not titulo:
+                          h3 = a.find_parent().find("h3") if a.find_parent() else None
+                          if h3:
+                              titulo = h3.get_text(strip=True)
+                      if not titulo:
+                          titulo = href.rsplit("/", 1)[-1].replace("-", " ").title()
+
+                      img = a.find("img")
+                      thumb = ""
+                      if img:
+                          thumb = img.get("src") or img.get("data-src") or img.get("data-lazy-src") or ""
+                          if thumb.startswith("//"):
+                              thumb = "https:" + thumb
+                          elif thumb.startswith("/"):
+                              thumb = "https://www.tokyvideo.com" + thumb
+
+                      if not thumb:
+                          try:
+                              vresp = requests.get(href, headers=headers, timeout=15)
+                              vsoup = BeautifulSoup(vresp.text, "html.parser")
+                              og = vsoup.find("meta", property="og:image")
+                              if og:
+                                  thumb = og.get("content", "")
+                          except Exception:
+                              pass
+
+                      f = gerar_html(titulo, thumb, href, outdir)
+                      print("  -> " + f)
+                      count += 1
+
+                  print(str(count) + " resultado(s) gravados")
+              except Exception as e:
+                  print("[ERRO] " + str(e))
+
+          def main():
+              query = os.environ.get("MOVIE_QUERY", "matrix")
+              print("Buscando por: " + query)
+              buscar_tankietube(query, "output")
+              buscar_tokyvideo(query, "output")
+
+          if __name__ == "__main__":
+              main()
+          PYEOF
+
+      - name: Executar busca
+        env:
+          MOVIE_QUERY: ${{ github.event.inputs.query || 'matrix' }}
+        run: python busca.py
+
+      - name: Commit e push dos HTMLs gerados
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Garante que a pasta existe (caso nenhum vídeo tenha sido encontrado)
+          mkdir -p output
+
+          git add output/
+
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração para commitar (nenhum HTML novo ou modificado)."
+          else
+            QUERY="${{ github.event.inputs.query || 'matrix' }}"
+            git commit -m "chore: HTMLs gerados para '${QUERY}' [skip ci]"
+            git push
+          fi
