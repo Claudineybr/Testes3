@@ -1,0 +1,152 @@
+name: Limpar Repositório
+
+on:
+  workflow_dispatch:
+    inputs:
+      limpar_output:
+        description: 'Apagar a pasta output/ (HTMLs gerados)'
+        type: boolean
+        default: true
+      limpar_titulos:
+        description: 'Apagar titulos_encontrados.txt'
+        type: boolean
+        default: true
+      limpar_busca_py:
+        description: 'Apagar busca.py (script temporário)'
+        type: boolean
+        default: true
+      limpar_filmes_txt:
+        description: 'Apagar filmes.txt (⚠️ apaga sua lista de filmes)'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Dry-run (só mostra, não apaga nem commita)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  limpar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Mostrar arquivos antes da limpeza
+        run: |
+          echo "=== ANTES ==="
+          ls -la
+          echo ""
+          echo "Conteúdo de output/ (se existir):"
+          if [ -d output ]; then
+            echo "  $(find output -type f | wc -l) arquivo(s)"
+            echo "  Tamanho: $(du -sh output | cut -f1)"
+          else
+            echo "  (pasta não existe)"
+          fi
+          echo ""
+          echo "titulos_encontrados.txt: $([ -f titulos_encontrados.txt ] && wc -l < titulos_encontrados.txt || echo 0) linha(s)"
+          echo "busca.py: $([ -f busca.py ] && echo 'existe' || echo 'não existe')"
+          echo "filmes.txt: $([ -f filmes.txt ] && echo 'existe' || echo 'não existe')"
+
+      - name: Executar limpeza
+        env:
+          LIMPAR_OUTPUT: ${{ inputs.limpar_output }}
+          LIMPAR_TITULOS: ${{ inputs.limpar_titulos }}
+          LIMPAR_BUSCA: ${{ inputs.limpar_busca_py }}
+          LIMPAR_FILMES: ${{ inputs.limpar_filmes_txt }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          echo ""
+          echo "=== LIMPEZA ==="
+
+          if [ "$LIMPAR_OUTPUT" = "true" ]; then
+            if [ -d output ]; then
+              echo "🗑️  Removendo output/ ($(find output -type f | wc -l) arquivo(s), $(du -sh output | cut -f1))"
+              rm -rf output
+            else
+              echo "ℹ️  output/ já não existe"
+            fi
+          else
+            echo "⏭️  output/ preservado"
+          fi
+
+          if [ "$LIMPAR_TITULOS" = "true" ]; then
+            if [ -f titulos_encontrados.txt ]; then
+              echo "🗑️  Removendo titulos_encontrados.txt"
+              rm -f titulos_encontrados.txt
+            else
+              echo "ℹ️  titulos_encontrados.txt já não existe"
+            fi
+          else
+            echo "⏭️  titulos_encontrados.txt preservado"
+          fi
+
+          if [ "$LIMPAR_BUSCA" = "true" ]; then
+            if [ -f busca.py ]; then
+              echo "🗑️  Removendo busca.py"
+              rm -f busca.py
+            else
+              echo "ℹ️  busca.py já não existe"
+            fi
+          else
+            echo "⏭️  busca.py preservado"
+          fi
+
+          if [ "$LIMPAR_FILMES" = "true" ]; then
+            if [ -f filmes.txt ]; then
+              echo "🗑️  Removendo filmes.txt"
+              rm -f filmes.txt
+            else
+              echo "ℹ️  filmes.txt já não existe"
+            fi
+          else
+            echo "⏭️  filmes.txt preservado (sua lista de filmes fica intacta)"
+          fi
+
+          echo ""
+          echo "=== DEPOIS ==="
+          ls -la
+
+      - name: Status do git
+        run: |
+          echo "=== ALTERAÇÕES DETECTADAS ==="
+          git status --short
+          echo ""
+          if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            echo "Nenhuma alteração."
+          else
+            echo "Há alterações para commitar."
+          fi
+
+      - name: Commit e push da limpeza
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "✅ Nada para commitar — repositório já está limpo."
+            exit 0
+          fi
+
+          # Monta descrição do que foi limpo
+          DESC=""
+          [ "${{ inputs.limpar_output }}" = "true" ]    && DESC="$DESC output/"
+          [ "${{ inputs.limpar_titulos }}" = "true" ]   && DESC="$DESC titulos_encontrados.txt"
+          [ "${{ inputs.limpar_busca_py }}" = "true" ]  && DESC="$DESC busca.py"
+          [ "${{ inputs.limpar_filmes_txt }}" = "true" ] && DESC="$DESC filmes.txt"
+
+          git commit -m "chore: limpar repo ($DESC ) [skip ci]"
+          git push
+          echo "✅ Limpeza commitada e enviada."
+
+      - name: Aviso de dry-run
+        if: ${{ inputs.dry_run == true }}
+        run: |
+          echo "🔍 DRY-RUN: nada foi commitado."
+          echo "Rode novamente com 'dry_run' desmarcado para aplicar as mudanças."
