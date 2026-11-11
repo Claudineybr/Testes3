@@ -1,16 +1,15 @@
-name: Buscar Filmes (Tokyvideo & TankieTube)
+name: Buscar Filmes (Tokyvideo & TankieTube) — só > 40 min
 
 on:
   workflow_dispatch:
     inputs:
-      query:
-        description: 'Nome do filme para buscar'
-        required: true
-        default: 'matrix'
+      filmes:
+        description: 'Lista opcional separada por vírgula (sobrescreve filmes.txt)'
+        required: false
+        default: ''
   schedule:
-    - cron: '0 12 * * *'
+    - cron: '0 9 * * 1'
 
-# Permissão para o GITHUB_TOKEN poder commitar no repositório
 permissions:
   contents: write
 
@@ -30,167 +29,185 @@ jobs:
       - name: Criar script de busca
         run: |
           cat << 'PYEOF' > busca.py
-          import os
-          import re
-          import json
-          import unicodedata
-          import requests
+          import os, re, json, unicodedata, requests
           from bs4 import BeautifulSoup
           from html import escape as html_escape
 
-          def slugify(text):
-              text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
-              text = re.sub(r"[^\w\s-]", "", text).strip().lower()
-              text = re.sub(r"[-\s]+", "-", text)
-              return text[:80] or "video"
+          MIN_DURACAO = 40 * 60  # 40 minutos em segundos
+
+          def carregar_lista():
+              entrada = os.environ.get("FILMES_INPUT", "").strip()
+              if entrada:
+                  return [f.strip() for f in entrada.split(",") if f.strip()]
+              if os.path.exists("filmes.txt"):
+                  with open("filmes.txt", "r", encoding="utf-8") as f:
+                      return [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
+              return ["matrix"]
+
+          def iso8601_para_segundos(iso):
+              if not iso: return 0
+              m = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', iso)
+              if not m: return 0
+              return int(m.group(1) or 0)*3600 + int(m.group(2) or 0)*60 + int(m.group(3) or 0)
+
+          def hhmmss_para_segundos(t):
+              p = t.split(":")
+              try: p = [int(x) for x in p]
+              except ValueError: return 0
+              if len(p) == 3: return p[0]*3600 + p[1]*60 + p[2]
+              if len(p) == 2: return p[0]*60 + p[1]
+              return 0
+
+          def formatar_duracao(seg):
+              h, m, s = seg//3600, (seg%3600)//60, seg%60
+              return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+
+          def slugify(t):
+              t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
+              t = re.sub(r"[^\w\s-]", "", t).strip().lower()
+              return re.sub(r"[-\s]+", "-", t)[:80] or "video"
 
           def gerar_html(titulo, thumb, link, outdir):
               os.makedirs(outdir, exist_ok=True)
-              slug = slugify(titulo)
-              filename = os.path.join(outdir, slug + ".html")
-
+              filename = os.path.join(outdir, slugify(titulo) + ".html")
               json_ld = {
-                  "@context": "https://schema.org",
-                  "@type": "VideoObject",
+                  "@context": "https://schema.org", "@type": "VideoObject",
                   "supportPlatform": ["https://schema.org/IOSPlatform", "https://schema.org/AndroidPlatform"],
-                  "name": titulo,
-                  "description": "Assista " + titulo,
-                  "thumbnailUrl": [thumb] if thumb else [],
-                  "contentUrl": link,
+                  "name": titulo, "description": "Assista " + titulo,
+                  "thumbnailUrl": [thumb] if thumb else [], "contentUrl": link,
               }
-              json_ld_str = json.dumps(json_ld, ensure_ascii=False, indent=2)
-              title_esc = html_escape(titulo)
-              thumb_esc = html_escape(thumb)
-              link_esc = html_escape(link)
-
               template = """<!DOCTYPE html>
-          <html lang="pt-BR">
-          <head>
-          <meta charset="UTF-8">
+          <html lang="pt-BR"><head><meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <script type="application/ld+json">
-          {json_ld}
-          </script>
+          <script type="application/ld+json">{json_ld}</script>
           <title>{title}</title>
-          <style>
-            body {{ background: #000; color: #fff; font-family: sans-serif; margin: 0; padding: 20px; }}
-            h1 {{ font-size: 24px; text-align: center; margin-bottom: 30px; }}
-          </style>
-          </head>
-          <body>
-
+          <style>body{{background:#000;color:#fff;font-family:sans-serif;margin:0;padding:20px}}h1{{font-size:24px;text-align:center;margin-bottom:30px}}</style>
+          </head><body>
           <h1>{title}</h1>
-
-          <div style="background: #0b0b12; border-radius:20px; overflow:hidden; box-shadow:0 25px 60px rgba(0,0,0,.8); margin:25px 0; border:1px solid rgba(255,255,255,.06);">
-
-            <a href="{link}" target="_blank" style="display: block; position: relative; text-decoration: none;">
-
-              <img src="{thumb}" style="width:100%; display:block;">
-
-              <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(0,0,0,0.7), transparent);"></div>
-
-              <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); width:70px; height:70px; background:linear-gradient(135deg,#7a00ff,#c000ff); border-radius:50%; display:flex; align-items:center; justify-content:center; box-shadow:0 0 20px rgba(120,0,255,.6); color:white; font-size:26px; border:2px solid rgba(255,255,255,.2);">▶</div>
-
-              <div style="position:absolute; top:12px; right:12px; background:#ff003c; padding:6px 12px; border-radius:20px; font-size:11px; color:#fff; font-weight:bold;">HD</div>
+          <div style="background:#0b0b12;border-radius:20px;overflow:hidden;box-shadow:0 25px 60px rgba(0,0,0,.8);margin:25px 0;border:1px solid rgba(255,255,255,.06);">
+            <a href="{link}" target="_blank" style="display:block;position:relative;text-decoration:none;">
+              <img src="{thumb}" style="width:100%;display:block;">
+              <div style="position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,0.7),transparent);"></div>
+              <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:70px;height:70px;background:linear-gradient(135deg,#7a00ff,#c000ff);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 20px rgba(120,0,255,.6);color:white;font-size:26px;border:2px solid rgba(255,255,255,.2);">▶</div>
+              <div style="position:absolute;top:12px;right:12px;background:#ff003c;padding:6px 12px;border-radius:20px;font-size:11px;color:#fff;font-weight:bold;">HD</div>
             </a>
-
-          </div>
-
-          </body>
-          </html>
-          """
-              content = template.format(json_ld=json_ld_str, title=title_esc, link=link_esc, thumb=thumb_esc)
+          </div></body></html>"""
               with open(filename, "w", encoding="utf-8") as f:
-                  f.write(content)
-              return filename
+                  f.write(template.format(json_ld=json.dumps(json_ld, ensure_ascii=False, indent=2),
+                                           title=html_escape(titulo), link=html_escape(link), thumb=html_escape(thumb)))
 
-          def buscar_tankietube(query, outdir):
-              url = "https://tankie.tube/api/v1/search/videos"
-              params = {"search": query, "count": 10}
-              print("\n=== Tankie.Tube ===")
+          def extrair_duracao_toky(html):
+              soup = BeautifulSoup(html, "html.parser")
+              m = soup.find("meta", {"itemprop": "duration"})
+              if m and m.get("content"): return iso8601_para_segundos(m["content"])
+              m = soup.find("meta", {"property": "og:video:duration"})
+              if m and m.get("content"):
+                  try: return int(m["content"])
+                  except ValueError: pass
+              for sc in soup.find_all("script", type="application/ld+json"):
+                  try:
+                      d = json.loads(sc.string or "")
+                      for it in (d if isinstance(d, list) else [d]):
+                          if isinstance(it, dict) and it.get("duration"):
+                              return iso8601_para_segundos(it["duration"])
+                  except Exception: pass
+              m = re.search(r'"duration"\s*:\s*"(PT[\dHMS]+)"', html)
+              if m: return iso8601_para_segundos(m.group(1))
+              m = re.search(r'(\d{1,2}:\d{2}:\d{2})', html)
+              if m: return hhmmss_para_segundos(m.group(1))
+              return 0
+
+          def buscar_tankietube(query, outdir, encontrados):
+              n = 0
               try:
-                  resp = requests.get(url, params=params, timeout=20)
-                  resp.raise_for_status()
-                  data = resp.json()
-                  videos = data.get("data", [])
-                  print(str(len(videos)) + " resultado(s) encontrados")
-                  for v in videos:
-                      name = v.get("name", "")
-                      link = v.get("url") or ("https://tankie.tube/w/" + v.get("shortUUID", ""))
-                      thumb_path = v.get("thumbnailPath") or v.get("previewPath") or ""
-                      thumb = "https://tankie.tube" + thumb_path if thumb_path else ""
+                  r = requests.get("https://tankie.tube/api/v1/search/videos",
+                                   params={"search": query, "count": 10}, timeout=20)
+                  r.raise_for_status()
+                  for v in r.json().get("data", []):
+                      name, dur = v.get("name", ""), v.get("duration", 0) or 0
+                      if dur < MIN_DURACAO:
+                          print(f"    [<40min] {name} ({formatar_duracao(dur)})")
+                          continue
+                      link = v.get("url") or ("https://tankie.tube/w/" + v.get("shortUUID",""))
+                      tp = v.get("thumbnailPath") or v.get("previewPath") or ""
+                      thumb = "https://tankie.tube" + tp if tp else ""
                       if name and link:
-                          f = gerar_html(name, thumb, link, outdir)
-                          print("  -> " + f)
+                          gerar_html(name, thumb, link, outdir)
+                          encontrados.add(name); n += 1
+                          print(f"    [OK] {name} ({formatar_duracao(dur)})")
               except Exception as e:
-                  print("[ERRO] " + str(e))
+                  print(f"    [ERRO Tankie] {e}")
+              return n
 
-          def buscar_tokyvideo(query, outdir):
-              print("\n=== Tokyvideo ===")
-              url = "https://www.tokyvideo.com/search"
+          def buscar_tokyvideo(query, outdir, encontrados):
+              n = 0
               headers = {
                   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                   "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
               }
               try:
-                  resp = requests.get(url, params={"q": query}, headers=headers, timeout=20)
-                  resp.raise_for_status()
-                  soup = BeautifulSoup(resp.text, "html.parser")
-
-                  vistos = set()
-                  count = 0
+                  r = requests.get("https://www.tokyvideo.com/search", params={"q": query}, headers=headers, timeout=20)
+                  r.raise_for_status()
+                  soup = BeautifulSoup(r.text, "html.parser")
+                  vistos, links = set(), []
                   for a in soup.find_all("a", href=True):
-                      href = a.get("href", "")
-                      if "/video/" not in href:
-                          continue
-                      if href.startswith("/"):
-                          href = "https://www.tokyvideo.com" + href
-                      elif not href.startswith("http"):
-                          continue
-                      if href in vistos:
-                          continue
-                      vistos.add(href)
-
+                      href = a["href"]
+                      if "/video/" not in href: continue
+                      if href.startswith("/"): href = "https://www.tokyvideo.com" + href
+                      elif not href.startswith("http"): continue
+                      if href in vistos: continue
+                      vistos.add(href); links.append((a, href))
+                  print(f"    {len(links)} link(s) na busca")
+                  for i, (a, href) in enumerate(links, 1):
+                      vsoup, dur = None, 0
+                      try:
+                          vr = requests.get(href, headers=headers, timeout=15)
+                          dur = extrair_duracao_toky(vr.text)
+                          vsoup = BeautifulSoup(vr.text, "html.parser")
+                      except Exception:
+                          pass
                       titulo = a.get("title") or a.get_text(strip=True)
                       if not titulo:
-                          h3 = a.find_parent().find("h3") if a.find_parent() else None
-                          if h3:
-                              titulo = h3.get_text(strip=True)
+                          p = a.find_parent()
+                          h3 = p.find("h3") if p else None
+                          if h3: titulo = h3.get_text(strip=True)
                       if not titulo:
                           titulo = href.rsplit("/", 1)[-1].replace("-", " ").title()
-
+                      if dur < MIN_DURACAO:
+                          print(f"    [{i}/{len(links)}] [<40min] {titulo} ({formatar_duracao(dur)})")
+                          continue
                       img = a.find("img")
                       thumb = ""
                       if img:
                           thumb = img.get("src") or img.get("data-src") or img.get("data-lazy-src") or ""
-                          if thumb.startswith("//"):
-                              thumb = "https:" + thumb
-                          elif thumb.startswith("/"):
-                              thumb = "https://www.tokyvideo.com" + thumb
-
-                      if not thumb:
-                          try:
-                              vresp = requests.get(href, headers=headers, timeout=15)
-                              vsoup = BeautifulSoup(vresp.text, "html.parser")
-                              og = vsoup.find("meta", property="og:image")
-                              if og:
-                                  thumb = og.get("content", "")
-                          except Exception:
-                              pass
-
-                      f = gerar_html(titulo, thumb, href, outdir)
-                      print("  -> " + f)
-                      count += 1
-
-                  print(str(count) + " resultado(s) gravados")
+                          if thumb.startswith("//"): thumb = "https:" + thumb
+                          elif thumb.startswith("/"): thumb = "https://www.tokyvideo.com" + thumb
+                      if not thumb and vsoup:
+                          og = vsoup.find("meta", property="og:image")
+                          if og: thumb = og.get("content", "")
+                      gerar_html(titulo, thumb, href, outdir)
+                      encontrados.add(titulo); n += 1
+                      print(f"    [{i}/{len(links)}] [OK] {titulo} ({formatar_duracao(dur)})")
               except Exception as e:
-                  print("[ERRO] " + str(e))
+                  print(f"    [ERRO Toky] {e}")
+              return n
 
           def main():
-              query = os.environ.get("MOVIE_QUERY", "matrix")
-              print("Buscando por: " + query)
-              buscar_tankietube(query, "output")
-              buscar_tokyvideo(query, "output")
+              filmes = carregar_lista()
+              print(f"Total de filmes na lista: {len(filmes)}")
+              encontrados = set()
+              for i, filme in enumerate(filmes, 1):
+                  print(f"\n[{i}/{len(filmes)}] Buscando: {filme}")
+                  a = buscar_tankietube(filme, "output", encontrados)
+                  b = buscar_tokyvideo(filme, "output", encontrados)
+                  print(f"    Tankie: {a} | Toky: {b}")
+              if encontrados:
+                  with open("titulos_encontrados.txt", "w", encoding="utf-8") as f:
+                      for t in sorted(encontrados):
+                          f.write(t + "\n")
+                  print(f"\n✅ {len(encontrados)} títulos (>40 min) salvos em titulos_encontrados.txt")
+              else:
+                  print("\n⚠️ Nenhum vídeo com mais de 40 minutos encontrado.")
 
           if __name__ == "__main__":
               main()
@@ -198,23 +215,19 @@ jobs:
 
       - name: Executar busca
         env:
-          MOVIE_QUERY: ${{ github.event.inputs.query || 'matrix' }}
+          FILMES_INPUT: ${{ github.event.inputs.filmes }}
         run: python busca.py
 
-      - name: Commit e push dos HTMLs gerados
+      - name: Commit e push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Garante que a pasta existe (caso nenhum vídeo tenha sido encontrado)
           mkdir -p output
-
-          git add output/
-
+          touch titulos_encontrados.txt
+          git add output/ titulos_encontrados.txt
           if git diff --cached --quiet; then
-            echo "Nenhuma alteração para commitar (nenhum HTML novo ou modificado)."
+            echo "Nenhuma alteração para commitar."
           else
-            QUERY="${{ github.event.inputs.query || 'matrix' }}"
-            git commit -m "chore: HTMLs gerados para '${QUERY}' [skip ci]"
+            git commit -m "chore: HTMLs e títulos (>40min) [skip ci]"
             git push
           fi
