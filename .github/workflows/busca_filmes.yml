@@ -33,7 +33,15 @@ jobs:
           from bs4 import BeautifulSoup
           from html import escape as html_escape
 
-          MIN_DURACAO = 40 * 60  # 40 minutos em segundos
+          MIN_DURACAO = 40 * 60
+
+          # Palavras que indicam que NÃO é filme (filtro de ruído)
+          BLACKLIST = [
+              "top 5", "top 10", "gols", "gol ", "futebol", "matchday", "ao vivo",
+              "live:", "hurricane", "notícias", "concerto", "show completo",
+              "podcast", "episode", "episódio", "temporada", "season",
+              "trailer", "teaser", "videoclipe", "clipe oficial",
+          ]
 
           def carregar_lista():
               entrada = os.environ.get("FILMES_INPUT", "").strip()
@@ -44,23 +52,29 @@ jobs:
                       return [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
               return ["matrix"]
 
+          def eh_duracao(text):
+              return bool(re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', text.strip()))
+
+          def parse_duration_text(text):
+              m = re.match(r'^(\d{1,2}):(\d{2})(?::(\d{2}))?$', text.strip())
+              if not m: return 0
+              a, b, c = m.groups()
+              if c is not None: return int(a)*3600 + int(b)*60 + int(c)
+              return int(a)*60 + int(b)
+
           def iso8601_para_segundos(iso):
               if not iso: return 0
               m = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', iso)
               if not m: return 0
               return int(m.group(1) or 0)*3600 + int(m.group(2) or 0)*60 + int(m.group(3) or 0)
 
-          def hhmmss_para_segundos(t):
-              p = t.split(":")
-              try: p = [int(x) for x in p]
-              except ValueError: return 0
-              if len(p) == 3: return p[0]*3600 + p[1]*60 + p[2]
-              if len(p) == 2: return p[0]*60 + p[1]
-              return 0
-
           def formatar_duracao(seg):
               h, m, s = seg//3600, (seg%3600)//60, seg%60
               return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+
+          def parece_filme(titulo):
+              t = titulo.lower()
+              return not any(n in t for n in BLACKLIST)
 
           def slugify(t):
               t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
@@ -96,14 +110,18 @@ jobs:
                   f.write(template.format(json_ld=json.dumps(json_ld, ensure_ascii=False, indent=2),
                                            title=html_escape(titulo), link=html_escape(link), thumb=html_escape(thumb)))
 
-          def extrair_duracao_toky(html):
+          def extrair_duracao_pagina(html):
+              """Fallback: tenta achar duração na página do vídeo."""
               soup = BeautifulSoup(html, "html.parser")
+              # 1. meta itemprop
               m = soup.find("meta", {"itemprop": "duration"})
               if m and m.get("content"): return iso8601_para_segundos(m["content"])
+              # 2. meta og:video:duration
               m = soup.find("meta", {"property": "og:video:duration"})
               if m and m.get("content"):
                   try: return int(m["content"])
                   except ValueError: pass
+              # 3. JSON-LD
               for sc in soup.find_all("script", type="application/ld+json"):
                   try:
                       d = json.loads(sc.string or "")
@@ -111,10 +129,21 @@ jobs:
                           if isinstance(it, dict) and it.get("duration"):
                               return iso8601_para_segundos(it["duration"])
                   except Exception: pass
-              m = re.search(r'"duration"\s*:\s*"(PT[\dHMS]+)"', html)
+              # 4. span/div com classe duration
+              for sel in ["span.duration", "div.duration", ".video-duration", ".time-duration"]:
+                  el = soup.select_one(sel)
+                  if el:
+                      d = parse_duration_text(el.get_text(strip=True))
+                      if d: return d
+              # 5. data-duration attribute
+              for el in soup.find_all(attrs={"data-duration": True}):
+                  try:
+                      v = str(el["data-duration"]).strip()
+                      return int(v) if v.isdigit() else parse_duration_text(v)
+                  except Exception: pass
+              # 6. regex em string HH:MM:SS
+              m = re.search(r'"duration"\s*:\s*"?(PT[\dHMS]+)"?', html)
               if m: return iso8601_para_segundos(m.group(1))
-              m = re.search(r'(\d{1,2}:\d{2}:\d{2})', html)
-              if m: return hhmmss_para_segundos(m.group(1))
               return 0
 
           def buscar_tankietube(query, outdir, encontrados):
@@ -127,6 +156,9 @@ jobs:
                       name, dur = v.get("name", ""), v.get("duration", 0) or 0
                       if dur < MIN_DURACAO:
                           print(f"    [<40min] {name} ({formatar_duracao(dur)})")
+                          continue
+                      if not parece_filme(name):
+                          print(f"    [filtro] {name}")
                           continue
                       link = v.get("url") or ("https://tankie.tube/w/" + v.get("shortUUID",""))
                       tp = v.get("thumbnailPath") or v.get("previewPath") or ""
@@ -158,26 +190,73 @@ jobs:
                       if href in vistos: continue
                       vistos.add(href); links.append((a, href))
                   print(f"    {len(links)} link(s) na busca")
+
                   for i, (a, href) in enumerate(links, 1):
-                      vsoup, dur = None, 0
-                      try:
-                          vr = requests.get(href, headers=headers, timeout=15)
-                          dur = extrair_duracao_toky(vr.text)
-                          vsoup = BeautifulSoup(vr.text, "html.parser")
-                      except Exception:
-                          pass
-                      titulo = a.get("title") or a.get_text(strip=True)
+                      # ---------- 1) Extrai duração e título DO PRÓPRIO CARD ----------
+                      dur, titulo = 0, ""
+
+                      # title attribute
+                      titulo = (a.get("title") or "").strip()
+
+                      # img alt
                       if not titulo:
-                          p = a.find_parent()
-                          h3 = p.find("h3") if p else None
-                          if h3: titulo = h3.get_text(strip=True)
-                      if not titulo:
+                          img = a.find("img")
+                          if img:
+                              titulo = (img.get("alt") or "").strip()
+
+                      # texto do <a> — separa duração do resto
+                      a_text = a.get_text(separator=" ", strip=True)
+                      if a_text:
+                          if eh_duracao(a_text):
+                              dur = parse_duration_text(a_text)
+                          else:
+                              cleaned = []
+                              for p in a_text.split():
+                                  d = parse_duration_text(p)
+                                  if d > 0 and dur == 0:
+                                      dur = d
+                                  else:
+                                      cleaned.append(p)
+                              if not titulo:
+                                  titulo = " ".join(cleaned).strip()
+
+                      # Se título ficou vazio ou é duração, procura em irmão
+                      if not titulo or eh_duracao(titulo):
+                          parent = a.find_parent()
+                          if parent:
+                              h = parent.find(["h3", "h2", "h4"])
+                              if h:
+                                  titulo = h.get_text(strip=True)
+
+                      # Fallback: slug da URL
+                      if not titulo or eh_duracao(titulo):
                           titulo = href.rsplit("/", 1)[-1].replace("-", " ").title()
+
+                      # ---------- 2) Se não achou duração no card, busca na página ----------
+                      vsoup = None
+                      if dur == 0:
+                          try:
+                              vr = requests.get(href, headers=headers, timeout=15)
+                              dur = extrair_duracao_pagina(vr.text)
+                              vsoup = BeautifulSoup(vr.text, "html.parser")
+                          except Exception: pass
+
+                      # ---------- 3) Filtro de duração ----------
+                      if dur == 0:
+                          print(f"    [{i}/{len(links)}] [dur?] {titulo}")
+                          continue
                       if dur < MIN_DURACAO:
                           print(f"    [{i}/{len(links)}] [<40min] {titulo} ({formatar_duracao(dur)})")
                           continue
-                      img = a.find("img")
+
+                      # ---------- 4) Filtro de ruído (não-filme) ----------
+                      if not parece_filme(titulo):
+                          print(f"    [{i}/{len(links)}] [filtro] {titulo}")
+                          continue
+
+                      # ---------- 5) Thumbnail ----------
                       thumb = ""
+                      img = a.find("img")
                       if img:
                           thumb = img.get("src") or img.get("data-src") or img.get("data-lazy-src") or ""
                           if thumb.startswith("//"): thumb = "https:" + thumb
@@ -185,6 +264,7 @@ jobs:
                       if not thumb and vsoup:
                           og = vsoup.find("meta", property="og:image")
                           if og: thumb = og.get("content", "")
+
                       gerar_html(titulo, thumb, href, outdir)
                       encontrados.add(titulo); n += 1
                       print(f"    [{i}/{len(links)}] [OK] {titulo} ({formatar_duracao(dur)})")
