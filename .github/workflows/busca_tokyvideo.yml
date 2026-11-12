@@ -1,4 +1,4 @@
-name: Buscar Filmes — Tokyvideo Perfis + Categorias
+name: Buscar Filmes — Tokyvideo Categorias (Playwright + Debug)
 
 on:
   workflow_dispatch:
@@ -9,15 +9,11 @@ on:
         default: 50
         required: false
       resetar:
-        description: '⚠️ Zerar histórico (recomeçar do zero)'
-        type: boolean
-        default: false
-      pular_categorias:
-        description: 'Pular categorias fixas e ir direto para os perfis'
+        description: '⚠️ Zerar histórico de links'
         type: boolean
         default: false
   schedule:
-    - cron: '0 6 * * 1'   # toda segunda às 6h UTC
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: write
@@ -26,7 +22,7 @@ permissions:
 jobs:
   buscar:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,13 +59,10 @@ jobs:
 
           LIMITE = int(os.environ.get("LIMITE", "50"))
           RESETAR = os.environ.get("RESETAR", "").lower() == "true"
-          PULAR_CATS = os.environ.get("PULAR_CATS", "").lower() == "true"
-          
           MIN_DURACAO = 40 * 60
           ARQ_ESTADO = "tokyvideo_estado.json"
           ARQ_TITULOS = "titulos_encontrados.txt"
 
-          # Páginas de categorias fixas (para começar)
           CATALOGOS = [
               "https://www.tokyvideo.com/br/séries/filmes-diversos",
               "https://www.tokyvideo.com/br/séries/netcine-filmes-e-series-online-gratis",
@@ -77,10 +70,6 @@ jobs:
               "https://www.tokyvideo.com/br/séries/filmes-de-animacao",
               "https://www.tokyvideo.com/br/séries/filmes-classicos",
           ]
-
-          # ⭐ URL base dos perfis (37 páginas)
-          # Se a URL correta for diferente, mude aqui:
-          URL_PERFIS_BASE = "https://www.tokyvideo.com/br/canais?page={p}"
 
           def normalizar(t):
               t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
@@ -132,30 +121,46 @@ jobs:
               return 0
 
           def obter_duracao_html(html, soup):
+              # 1. JSON-LD
               for script in soup.find_all("script", type="application/ld+json"):
                   try:
                       data = json.loads(script.string)
                       d = extrair_duracao_de_json(data)
                       if d > 0: return d
                   except: pass
+              
+              # 2. Meta tags
               for m in soup.find_all("meta"):
                   if m.get("itemprop") == "duration" or m.get("property") == "og:video:duration":
                       d = parse_duracao(m.get("content"))
                       if d > 0: return d
-              m = re.search(r'"duration"\s*:\s*"?(PT[\dHMS]+|[\d]+)"?', html)
-              if m:
-                  d = parse_duracao(m.group(1))
+              
+              # 3. Regex agressivo no HTML bruto (para pegar scripts do player)
+              # Procura por duration: 1234, "duration":"1234", duration: "1234"
+              matches = re.findall(r'duration["\']?\s*[:=]\s*["\']?(\d+)', html, re.IGNORECASE)
+              for m in matches:
+                  d = int(m)
+                  if 60 <= d <= 30000: return d # segundos
+              
+              matches = re.findall(r'duration["\']?\s*[:=]\s*["\']?(PT[\dHMS]+)', html, re.IGNORECASE)
+              for m in matches:
+                  d = parse_duracao(m)
                   if d > 0: return d
-              for sel in ["span.duration", "div.duration", ".video-duration", ".time-duration", "[itemprop='duration']"]:
+
+              # 4. Classes CSS
+              for sel in ["span.duration", "div.duration", ".video-duration", ".time-duration", "[itemprop='duration']", ".entry-duration", ".player-duration"]:
                   el = soup.select_one(sel)
                   if el:
                       d = parse_duracao(el.get_text(strip=True))
                       if d > 0: return d
+              
+              # 5. Texto puro
               texto_pagina = soup.get_text(" ", strip=True)
               m = re.search(r'\b(\d{1,2}:\d{2}:\d{2})\b', texto_pagina)
               if m:
                   d = parse_duracao(m.group(1))
                   if d > 60: return d
+                  
               return 0
 
           def gerar_html(titulo, thumb, link, outdir):
@@ -191,12 +196,9 @@ jobs:
               if os.path.exists(ARQ_ESTADO):
                   try:
                       with open(ARQ_ESTADO, "r", encoding="utf-8") as f:
-                          est = json.load(f)
-                          if "pagina_perfil" not in est: est["pagina_perfil"] = 1
-                          if "perfis_visitados" not in est: est["perfis_visitados"] = []
-                          return est
+                          return json.load(f)
                   except Exception: pass
-              return {"processados": [], "falhas": {}, "pagina_perfil": 1, "perfis_visitados": []}
+              return {"processados": [], "falhas": {}}
 
           def salvar_estado(estado):
               with open(ARQ_ESTADO, "w", encoding="utf-8") as f:
@@ -204,109 +206,66 @@ jobs:
 
           def main():
               estado = carregar_estado()
+              
               if RESETAR:
                   print("🔄 RESETANDO histórico...")
-                  estado = {"processados": [], "falhas": {}, "pagina_perfil": 1, "perfis_visitados": []}
+                  estado = {"processados": [], "falhas": {}}
               
               processados = set(estado.get("processados", []))
               falhas = estado.get("falhas", {})
-              perfis_visitados = set(estado.get("perfis_visitados", []))
-              pagina_perfil = estado.get("pagina_perfil", 1)
-              
               encontrados = set()
-              videos_gerados = 0
 
-              print(f"🎬 Tokyvideo — Meta: {LIMITE} filmes | Página de Perfil atual: {pagina_perfil}")
-              print(f"📂 Histórico: {len(processados)} filmes | {len(perfis_visitados)} perfis visitados")
+              print(f"🎬 Tokyvideo — limite: {LIMITE} filmes por run")
+              print(f"📂 Já processados anteriormente: {len(processados)}")
 
-              links_videos_para_processar = set()
+              links_coletados = set()
 
               with sync_playwright() as p:
                   browser = p.chromium.launch(headless=True)
                   context = browser.new_context(
                       user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                   )
+
                   page = context.new_page()
-
-                  # --- 1. CATEGORIAS FIXAS (se não pulou) ---
-                  if not PULAR_CATS:
-                      for url_cat in CATALOGOS:
-                          if videos_gerados >= LIMITE: break
-                          print(f"\n🌐 Catálogo fixo: {url_cat.split('/')[-1]}")
-                          try:
-                              page.goto(url_cat, timeout=60000)
-                              page.wait_for_timeout(2000)
-                              for _ in range(5): page.mouse.wheel(0, 5000); page.wait_for_timeout(500)
-                              soup = BeautifulSoup(page.content(), "html.parser")
-                              for a in soup.find_all("a", href=True):
-                                  if "/br/video/" in a["href"]:
-                                      lk = a["href"] if a["href"].startswith("http") else "https://www.tokyvideo.com" + a["href"]
-                                      if lk not in processados and falhas.get(lk, 0) < 3:
-                                          links_videos_para_processar.add(lk)
-                          except: pass
-
-                  # --- 2. PERFIS (37 páginas) ---
-                  # Vamos varrer as páginas de perfis até achar conteúdo novo ou o limite
-                  while videos_gerados < LIMITE and pagina_perfil <= 37:
-                      url_perfis = URL_PERFIS_BASE.format(p=pagina_perfil)
-                      print(f"\n👥 Varrendo Perfis - Página {pagina_perfil}/37")
-                      
+                  for url_cat in CATALOGOS:
+                      print(f"\n🌐 Abrindo catálogo: {url_cat.split('/')[-1]}")
                       try:
-                          page.goto(url_perfis, timeout=60000)
+                          page.goto(url_cat, timeout=60000)
                           page.wait_for_timeout(2000)
-                          soup_p = BeautifulSoup(page.content(), "html.parser")
-                          
-                          links_perfis = set()
-                          for a in soup_p.find_all("a", href=True):
-                              h = a["href"]
-                              if "/br/perfil/" in h or "/br/canal/" in h or "/br/usuario/" in h:
-                                  lk = h if h.startswith("http") else "https://www.tokyvideo.com" + h
-                                  links_perfis.add(lk)
-                          
-                          print(f"  → {len(links_perfis)} perfis encontrados nesta página")
-                          
-                          for perfil in links_perfis:
-                              if videos_gerados >= LIMITE: break
-                              if perfil in perfis_visitados: continue
-                              
-                              # Entra no perfil e pega os vídeos
-                              try:
-                                  page.goto(perfil, timeout=30000)
-                                  page.wait_for_timeout(1500)
-                                  soup_perfil = BeautifulSoup(page.content(), "html.parser")
-                                  for a_v in soup_perfil.find_all("a", href=True):
-                                      if "/br/video/" in a_v["href"]:
-                                          lk_v = a_v["href"] if a_v["href"].startswith("http") else "https://www.tokyvideo.com" + a_v["href"]
-                                          if lk_v not in processados and falhas.get(lk_v, 0) < 3:
-                                              links_videos_para_processar.add(lk_v)
-                                  perfis_visitados.add(perfil)
-                              except: pass
-                              
-                              # Se já temos muitos links, vamos processar antes de pegar mais
-                              if len(links_videos_para_processar) > 10:
-                                  break
+                          for _ in range(8): page.mouse.wheel(0, 5000); page.wait_for_timeout(500)
+
+                          html = page.content()
+                          soup = BeautifulSoup(html, "html.parser")
+                          cat_links = 0
+                          for a in soup.find_all("a", href=True):
+                              href = a["href"]
+                              if "/br/video/" in href:
+                                  link_abs = href if href.startswith("http") else "https://www.tokyvideo.com" + href
+                                  if link_abs not in links_coletados and link_abs not in processados and falhas.get(link_abs, 0) < 3:
+                                      links_coletados.add(link_abs)
+                                      cat_links += 1
+                          print(f"  → {cat_links} novos links encontrados")
                       except Exception as e:
-                          print(f"  ⚠️ Erro na página {pagina_perfil}: {e}")
-                      
-                      pagina_perfil += 1
-                      if len(links_videos_para_processar) > 20:
-                          break # Pausa para processar
+                          print(f"  ⚠️  Erro: {e}")
+                  page.close()
 
-                  print(f"\n🎞️  Links de vídeos coletados para processar agora: {len(links_videos_para_processar)}")
+                  print(f"\n🔗 Total de links novos: {len(links_coletados)}")
 
-                  # --- 3. PROCESSAR VÍDEOS (Checar Duração e Salvar) ---
-                  for i, href in enumerate(list(links_videos_para_processar)):
-                      if videos_gerados >= LIMITE: break
-                      
-                      page_v = context.new_page()
+                  novos_html = 0
+                  links_para_processar = list(links_coletados)[:LIMITE * 3]
+
+                  for i, href in enumerate(links_para_processar, 1):
+                      if novos_html >= LIMITE: break
+
+                      page_filme = context.new_page()
                       duracao_rede = {"valor": 0}
 
-                      def handler(resp):
+                      def handler(response):
                           try:
-                              ct = resp.headers.get("content-type", "")
+                              ct = response.headers.get("content-type", "")
                               if "json" in ct or "javascript" in ct:
-                                  if resp.status == 200:
-                                      txt = resp.text()
+                                  if response.status == 200:
+                                      txt = response.text()
                                       if len(txt) > 500000: return
                                       if "duration" in txt.lower():
                                           try:
@@ -320,32 +279,45 @@ jobs:
                                                   if d > duracao_rede["valor"]: duracao_rede["valor"] = d
                           except: pass
 
-                      page_v.on("response", handler)
+                      page_filme.on("response", handler)
 
                       try:
-                          page_v.goto(href, timeout=30000, wait_until="domcontentloaded")
-                          try: page_v.wait_for_load_state("networkidle", timeout=10000)
+                          page_filme.goto(href, timeout=30000, wait_until="domcontentloaded")
+                          try: page_filme.wait_for_load_state("networkidle", timeout=10000)
                           except: pass
-                          page_v.wait_for_timeout(1000)
+                          page_filme.wait_for_timeout(1000)
 
-                          conteudo = page_v.content()
+                          conteudo = page_filme.content()
                           soup_v = BeautifulSoup(conteudo, "html.parser")
-                          
+
                           titulo = ""
                           og_title = soup_v.find("meta", property="og:title")
                           if og_title: titulo = og_title.get("content", "").strip()
-                          if not titulo: titulo = page_v.title().replace(" - Tokyvideo", "").strip()
+                          if not titulo:
+                              h1 = soup_v.find("h1")
+                              if h1: titulo = h1.get_text(strip=True)
+                          if not titulo: titulo = page_filme.title().replace(" - Tokyvideo", "").strip()
+
                           titulo = re.sub(r"^Assistir\s+['\"]?|['\"]?\s+Filme.*$", "", titulo, flags=re.IGNORECASE).strip()
+                          titulo = re.sub(r"\s*\|.*$", "", titulo).strip()
 
-                          dur = duracao_rede["valor"] if duracao_rede["valor"] > 0 else obter_duracao_html(conteudo, soup_v)
+                          dur_seg = duracao_rede["valor"] if duracao_rede["valor"] > 0 else obter_duracao_html(conteudo, soup_v)
 
-                          if dur < MIN_DURACAO:
-                              if dur == 0:
+                          if dur_seg < MIN_DURACAO:
+                              if dur_seg == 0:
                                   falhas[href] = falhas.get(href, 0) + 1
-                                  print(f"  ❓ {titulo[:40]}... (0min - {falhas[href]}/3)")
+                                  print(f"  [{i}/{len(links_para_processar)}] ❓ {titulo[:40]}... (0min - {falhas[href]}/3)")
+                                  
+                                  # ⭐ SALVA HTML PARA DEBUG
+                                  os.makedirs("debug", exist_ok=True)
+                                  debug_file = f"debug/{slugify(titulo)}.html"
+                                  with open(debug_file, "w", encoding="utf-8") as f:
+                                      f.write(conteudo)
+                                  print(f"     (HTML de debug salvo em {debug_file})")
                               else:
                                   processados.add(href)
-                              page_v.close()
+                                  print(f"  [{i}/{len(links_para_processar)}] ⏭️  {titulo[:40]}... ({dur_seg//60}min) - <40min")
+                              page_filme.close()
                               continue
 
                           thumb = ""
@@ -356,26 +328,23 @@ jobs:
                           encontrados.add(titulo)
                           processados.add(href)
                           if href in falhas: del falhas[href]
-                          videos_gerados += 1
-                          print(f"  ✅ {titulo[:50]} ({dur//60}min)")
-                          
+                          novos_html += 1
+                          fonte = "rede" if duracao_rede["valor"] > 0 else "html"
+                          print(f"  [{i}/{len(links_para_processar)}] ✅ {titulo[:50]} ({dur_seg//60}min) [{fonte}]")
+
                       except Exception as e:
                           falhas[href] = falhas.get(href, 0) + 1
-                          print(f"  ⚠️ erro no vídeo: {str(e)[:30]} ({falhas[href]}/3)")
+                          print(f"  [{i}/{len(links_para_processar)}] ⚠️  erro: {str(e)[:60]} ({falhas[href]}/3)")
                       finally:
-                          page_v.close()
+                          page_filme.close()
 
                   context.close()
                   browser.close()
 
-              # Salva estado
               estado["processados"] = list(processados)
               estado["falhas"] = falhas
-              estado["perfis_visitados"] = list(perfis_visitados)
-              estado["pagina_perfil"] = pagina_perfil
               salvar_estado(estado)
 
-              # Salva títulos
               titulos_antigos = set()
               if os.path.exists(ARQ_TITULOS):
                   with open(ARQ_TITULOS, "r", encoding="utf-8") as f:
@@ -386,8 +355,8 @@ jobs:
                       f.write(t + "\n")
 
               print(f"\n══════════ RESUMO ══════════")
-              print(f"Novos HTMLs gerados: {videos_gerados}")
-              print(f"Perfis visitados: {len(perfis_visitados)} (Próxima página: {pagina_perfil})")
+              print(f"Novos HTMLs: {novos_html}")
+              print(f"Total processados: {len(processados)}")
               print("════════════════════════════")
 
           if __name__ == "__main__":
@@ -398,7 +367,6 @@ jobs:
         env:
           LIMITE: ${{ inputs.limite || 50 }}
           RESETAR: ${{ inputs.resetar || 'false' }}
-          PULAR_CATS: ${{ inputs.pular_categorias || 'false' }}
         run: python tokyvideo.py
 
       - name: Commit e push
@@ -409,11 +377,15 @@ jobs:
           mkdir -p output
           touch tokyvideo_estado.json titulos_encontrados.txt
           git add output/ tokyvideo_estado.json titulos_encontrados.txt
+          # ⭐ Adiciona a pasta debug se existir
+          if [ -d "debug" ]; then
+            git add debug/
+          fi
           if git diff --cached --quiet; then
             echo "Nenhuma alteração."
             exit 0
           fi
-          git commit -m "chore: Tokyvideo Perfis — novos filmes [skip ci]"
+          git commit -m "chore: Tokyvideo + Debug de HTML [skip ci]"
           for i in 1 2 3 4 5; do
             if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
               echo "✅ Push OK"
