@@ -8,6 +8,10 @@ on:
         type: number
         default: 50
         required: false
+      resetar:
+        description: '⚠️ Zerar histórico (força testar tudo de novo)'
+        type: boolean
+        default: false
   schedule:
     - cron: '0 6 * * 1'   # toda segunda às 6h UTC
 
@@ -54,6 +58,7 @@ jobs:
               _orig_print(f"[{ts}]", *args, **kwargs)
 
           LIMITE = int(os.environ.get("LIMITE", "50"))
+          RESETAR = os.environ.get("RESETAR", "").lower() == "true"
           MIN_DURACAO = 40 * 60
           ARQ_ESTADO = "tokyvideo_estado.json"
           ARQ_TITULOS = "titulos_encontrados.txt"
@@ -75,71 +80,23 @@ jobs:
               t = re.sub(r"[^\w\s-]", "", t).strip().lower()
               return re.sub(r"[-\s]+", "-", t)[:80] or "video"
 
-          # ⭐ PARSER DE DURAÇÃO MAIS ROBUSTO
-          def parse_duracao(texto):
-              if not texto: return 0
-              texto = str(texto)
-              # Formato ISO 8601 (PT1H32M)
-              m = re.search(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', texto)
-              if m and (m.group(1) or m.group(2) or m.group(3)):
-                  return int(m.group(1) or 0)*3600 + int(m.group(2) or 0)*60 + int(m.group(3) or 0)
-              # Formato 1h 32m ou 1h32m
-              m = re.search(r'(\d+)h\s*(\d+)m', texto)
-              if m: return int(m.group(1))*3600 + int(m.group(2))*60
-              m = re.search(r'(\d+)h', texto)
-              if m and 'min' not in texto: return int(m.group(1))*3600
-              # Formato 01:32:45
-              m = re.search(r'(\d+):(\d+):(\d+)', texto)
-              if m: return int(m.group(1))*3600 + int(m.group(2))*60 + int(m.group(3))
-              # Formato 92:45
-              m = re.search(r'(\d+):(\d+)', texto)
-              if m: return int(m.group(1))*60 + int(m.group(2))
-              # Formato 92 min
-              m = re.search(r'(\d+)\s*min', texto)
-              if m: return int(m.group(1))*60
-              return 0
-
-          # ⭐ EXTRAI DURAÇÃO DE 6 LUGARES DIFERENTES
-          def obter_duracao(html, soup):
-              # 1. JSON-LD
-              for script in soup.find_all("script", type="application/ld+json"):
-                  try:
-                      data = json.loads(script.string)
-                      if isinstance(data, dict) and "duration" in data:
-                          d = parse_duracao(data["duration"])
-                          if d > 0: return d
-                      if isinstance(data, list):
-                          for item in data:
-                              if isinstance(item, dict) and "duration" in item:
-                                  d = parse_duracao(item["duration"])
-                                  if d > 0: return d
-                  except: pass
-              
-              # 2. Meta tags
-              for m in soup.find_all("meta"):
-                  if m.get("itemprop") == "duration" or m.get("property") == "og:video:duration":
-                      d = parse_duracao(m.get("content"))
-                      if d > 0: return d
-              
-              # 3. Regex no HTML bruto
+          def obter_duracao_html(html, soup):
+              # Fallback caso o JS falhe
               m = re.search(r'"duration"\s*:\s*"?(PT[\dHMS]+)"?', html)
               if m:
-                  d = parse_duracao(m.group(1))
+                  d = 0
+                  h = re.search(r'(\d+)H', m.group(1))
+                  mi = re.search(r'(\d+)M', m.group(1))
+                  s = re.search(r'(\d+)S', m.group(1))
+                  if h: d += int(h.group(1))*3600
+                  if mi: d += int(mi.group(1))*60
+                  if s: d += int(s.group(1))
                   if d > 0: return d
               
-              # 4. Classes CSS comuns
-              for sel in ["span.duration", "div.duration", ".video-duration", ".time-duration", "[itemprop='duration']", ".entry-duration"]:
-                  el = soup.select_one(sel)
-                  if el:
-                      d = parse_duracao(el.get_text(strip=True))
-                      if d > 0: return d
-              
-              # 5. Procura HH:MM:SS ou MM:SS no texto puro da página
-              texto_pagina = soup.get_text(" ", strip=True)
-              m = re.search(r'\b(\d{1,2}:\d{2}:\d{2})\b', texto_pagina)
+              m = re.search(r'(\d{1,2}:\d{2}:\d{2})', soup.get_text(" ", strip=True))
               if m:
-                  d = parse_duracao(m.group(1))
-                  if d > 60: return d # ignora coisas como 1:30
+                  p = m.group(1).split(":")
+                  return int(p[0])*3600 + int(p[1])*60 + int(p[2])
                   
               return 0
 
@@ -178,7 +135,7 @@ jobs:
                       with open(ARQ_ESTADO, "r", encoding="utf-8") as f:
                           return json.load(f)
                   except Exception: pass
-              return {"processados": []}
+              return {"processados": [], "falhas": {}}
 
           def salvar_estado(estado):
               with open(ARQ_ESTADO, "w", encoding="utf-8") as f:
@@ -186,7 +143,12 @@ jobs:
 
           def main():
               estado = carregar_estado()
+              if RESETAR:
+                  print("🔄 RESETANDO histórico...")
+                  estado = {"processados": [], "falhas": {}}
+              
               processados = set(estado.get("processados", []))
+              falhas = estado.get("falhas", {})
               encontrados = set()
 
               print(f"🎬 Tokyvideo — limite: {LIMITE} filmes por run")
@@ -214,7 +176,7 @@ jobs:
                               href = a["href"]
                               if "/br/video/" in href:
                                   link_abs = href if href.startswith("http") else "https://www.tokyvideo.com" + href
-                                  if link_abs not in links_coletados and link_abs not in processados:
+                                  if link_abs not in links_coletados and link_abs not in processados and falhas.get(link_abs, 0) < 3:
                                       links_coletados.add(link_abs)
                                       cat_links += 1
                           print(f"  → {cat_links} novos links encontrados nesta categoria")
@@ -232,13 +194,23 @@ jobs:
 
                       try:
                           page.goto(href, timeout=30000)
-                          # Espera um pouco mais para o JS carregar o player
                           page.wait_for_timeout(4000) 
 
+                          # Tenta pegar a duração via JavaScript direto no elemento <video>
+                          dur_seg = 0
+                          try:
+                              dur_seg = page.evaluate("() => { const v = document.querySelector('video'); return (v && !isNaN(v.duration)) ? v.duration : 0; }")
+                          except:
+                              pass
+                              
                           conteudo = page.content()
                           soup_v = BeautifulSoup(conteudo, "html.parser")
 
-                          # ⭐ Limpar Título
+                          # Se o JS falhou, tenta o fallback pelo HTML
+                          if not dur_seg:
+                              dur_seg = obter_duracao_html(conteudo, soup_v)
+
+                          # Limpeza do Título
                           titulo = ""
                           og_title = soup_v.find("meta", property="og:title")
                           if og_title: titulo = og_title.get("content", "").strip()
@@ -247,23 +219,24 @@ jobs:
                               if h1: titulo = h1.get_text(strip=True)
                           if not titulo:
                               titulo = page.title().replace(" - Tokyvideo", "").strip()
-                              
-                          # Remove prefixos/sufixos chatos
-                          titulo = re.sub(r"^Assistir\s+['\"]?|['\"]?\s+Filme.*$", "", titulo, flags=re.IGNORECASE).strip()
-                          titulo = re.sub(r"\s*\|.*$", "", titulo).strip()
-
-                          # ⭐ Nova extração de duração
-                          dur_seg = obter_duracao(conteudo, soup_v)
                           
+                          # Remove "Assistir" e aspas
+                          titulo = re.sub(r'^(Assistir|Ver)\s+', '', titulo, flags=re.IGNORECASE).strip()
+                          titulo = titulo.strip(' "\'')
+                          titulo = re.split(r'\s+[|-]\s+', titulo)[0].strip()
+
                           if dur_seg < MIN_DURACAO:
-                              # Se for 0, tenta salvar o HTML num arquivo de debug para o usuário olhar
                               if dur_seg == 0:
+                                  # SALVA O HTML PARA DEBUG SE NÃO ACHAR DURAÇÃO
                                   os.makedirs("debug", exist_ok=True)
                                   with open(f"debug/{slugify(titulo)}.html", "w", encoding="utf-8") as f:
                                       f.write(conteudo)
                                       
-                              print(f"  [{i}/{len(links_para_processar)}] ⏭️  {titulo[:40]}... (~{dur_seg//60}min) - <40min")
-                              processados.add(href)
+                                  falhas[href] = falhas.get(href, 0) + 1
+                                  print(f"  [{i}/{len(links_para_processar)}] ❓ {titulo[:40]}... (FALHA - salvo em debug)")
+                              else:
+                                  processados.add(href)
+                                  print(f"  [{i}/{len(links_para_processar)}] ⏭️  {titulo[:40]}... ({dur_seg//60}min) - <40min")
                               continue
 
                           thumb = ""
@@ -273,16 +246,19 @@ jobs:
                           gerar_html(titulo, thumb, href, "output")
                           encontrados.add(titulo)
                           processados.add(href)
+                          if href in falhas: del falhas[href]
                           novos_html += 1
                           print(f"  [{i}/{len(links_para_processar)}] ✅ {titulo[:50]} ({dur_seg//60}min)")
 
                       except Exception as e:
-                          print(f"  [{i}/{len(links_para_processar)}] ⚠️  erro: {e}")
+                          falhas[href] = falhas.get(href, 0) + 1
+                          print(f"  [{i}/{len(links_para_processar)}] ⚠️  erro: {e} (tentativa {falhas[href]}/3)")
                           continue
 
                   browser.close()
 
               estado["processados"] = list(processados)
+              estado["falhas"] = falhas
               salvar_estado(estado)
 
               titulos_antigos = set()
@@ -306,7 +282,17 @@ jobs:
       - name: Executar busca
         env:
           LIMITE: ${{ inputs.limite || 50 }}
+          RESETAR: ${{ inputs.resetar || 'false' }}
         run: python tokyvideo.py
+
+      # ⭐ NOVO: Upload de arquivos de debug se algo der errado
+      - name: Upload debug HTMLs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-tokyvideo
+          path: debug/
+          retention-days: 7
 
       - name: Commit e push
         run: |
@@ -316,10 +302,6 @@ jobs:
           mkdir -p output
           touch tokyvideo_estado.json titulos_encontrados.txt
           git add output/ tokyvideo_estado.json titulos_encontrados.txt
-          # Adiciona a pasta debug caso tenha sido criada
-          if [ -d "debug" ]; then
-            git add debug/
-          fi
           if git diff --cached --quiet; then
             echo "Nenhuma alteração."
             exit 0
