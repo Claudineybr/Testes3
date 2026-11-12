@@ -8,9 +8,9 @@ on:
         required: false
         default: ''
       lote:
-        description: 'Quantos filmes processar nesta execução (1-50)'
+        description: 'Quantos filmes processar nesta execução (1-500)'
         type: number
-        default: 25
+        default: 200
         required: false
       resetar:
         description: '⚠️ Zerar a fila (recomeçar do zero)'
@@ -56,14 +56,12 @@ jobs:
           from bs4 import BeautifulSoup
           from html import escape as html_escape
 
-          # ⭐ line-buffering: logs aparecem em tempo real no GitHub Actions
           try:
               sys.stdout.reconfigure(line_buffering=True)
               sys.stderr.reconfigure(line_buffering=True)
           except Exception:
               pass
 
-          # ⭐ wrapper global: todo print() já sai com flush + timestamp
           _orig_print = print
           def print(*args, **kwargs):
               kwargs.setdefault("flush", True)
@@ -77,7 +75,8 @@ jobs:
           INICIO         = time.time()
           LIMITE_SEG     = 5 * 3600
 
-          LOTE    = max(1, min(50, int(os.environ.get("LOTE", "25") or "25")))
+          # ⭐ CORRIGIDO: máximo 500 (era 50)
+          LOTE    = max(1, min(500, int(os.environ.get("LOTE", "200") or "200")))
           RESETAR = os.environ.get("RESETAR", "").lower() == "true"
 
           BLACKLIST = [
@@ -94,22 +93,27 @@ jobs:
               "o","a","os","as","de","da","do","das","dos","e","em","um","uma",
               "para","por","com","ao","à","no","na","nos","nas",
               "the","an","of","in","on","at","to","for","with",
+              "parte","part","vol","volume",
           }
 
-          # ---------------- utilidades ----------------
           def normalizar(t):
               t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
               return t.lower()
 
           def palavras_significativas(texto):
               n = re.sub(r"[^\w\s]", " ", normalizar(texto))
-              return [w for w in n.split() if len(w) >= 4 and w not in STOPWORDS]
+              return [
+                  w for w in n.split()
+                  if len(w) >= 4 and w not in STOPWORDS and not w.isdigit()
+              ]
 
           def eh_relevante(query, titulo):
               q = palavras_significativas(query)
               if not q: return True
               tn = normalizar(titulo)
-              return all(w in tn for w in q)
+              hits = sum(1 for w in q if w in tn)
+              if len(q) <= 2: return hits >= 1
+              return hits / len(q) >= 0.6
 
           def passa_blacklist(titulo):
               tn = normalizar(titulo)
@@ -142,16 +146,14 @@ jobs:
           def tempo_esgotado():
               return (time.time() - INICIO) > LIMITE_SEG
 
-          # ⭐ barra de progresso em linha (usa write/flush p/ não poluir)
-          def barra_progresso(atual, total, filme=""):
+          def barra_progresso(atual, total, filme="", sufixo=""):
               pct = int(100 * atual / total) if total else 0
               bloco = pct // 5
               barra = "█" * bloco + "░" * (20 - bloco)
-              nome = (filme[:45] + "…") if len(filme) > 45 else filme
-              sys.stdout.write(f"\r[{barra}] {pct:3d}% ({atual}/{total}) {nome:<46}")
+              nome = (filme[:38] + "…") if len(filme) > 38 else filme
+              sys.stdout.write(f"\r[{barra}] {pct:3d}% {atual}/{total} {nome:<40} {sufixo}")
               sys.stdout.flush()
 
-          # ---------------- HTML ----------------
           def gerar_html(titulo, thumb, link, outdir):
               os.makedirs(outdir, exist_ok=True)
               filename = os.path.join(outdir, slugify(titulo) + ".html")
@@ -181,7 +183,6 @@ jobs:
                   f.write(tpl.format(jl=json.dumps(json_ld,ensure_ascii=False,indent=2),
                                      t=html_escape(titulo), l=html_escape(link), th=html_escape(thumb)))
 
-          # ---------------- fila ----------------
           def carregar_filmes_txt():
               if not os.path.exists(ARQ_FILMES_TXT): return []
               with open(ARQ_FILMES_TXT,"r",encoding="utf-8") as f:
@@ -208,7 +209,6 @@ jobs:
               estado["pendentes"].extend(novos)
               return novos
 
-          # ---------------- duração ----------------
           def extrair_duracao_pagina(html):
               soup = BeautifulSoup(html,"html.parser")
               m = soup.find("meta",{"itemprop":"duration"})
@@ -237,7 +237,6 @@ jobs:
               m = re.search(r'"duration"\s*:\s*"?(PT[\dHMS]+)"?', html)
               return iso8601_para_segundos(m.group(1)) if m else 0
 
-          # ---------------- sites ----------------
           def buscar_tankietube(query, outdir, encontrados):
               n = 0
               try:
@@ -247,8 +246,10 @@ jobs:
                   for v in r.json().get("data",[]):
                       name, dur = v.get("name",""), v.get("duration",0) or 0
                       if dur < MIN_DURACAO: continue
-                      if not passa_blacklist(name): continue
-                      if not eh_relevante(query, name): continue
+                      if not passa_blacklist(name):
+                          print(f"      [blacklist] {name}"); continue
+                      if not eh_relevante(query, name):
+                          print(f"      [irrelevante] {name}"); continue
                       link = v.get("url") or ("https://tankie.tube/w/"+v.get("shortUUID",""))
                       tp = v.get("thumbnailPath") or v.get("previewPath") or ""
                       thumb = "https://tankie.tube" + tp if tp else ""
@@ -280,6 +281,8 @@ jobs:
                       if href in vistos: continue
                       vistos.add(href); links.append((a, href))
                   print(f"      Tokyvideo: {len(links)} link(s) na busca")
+
+                  stats = {"dur?": 0, "<40min": 0, "blacklist": 0, "irrelevante": 0, "OK": 0}
 
                   for i, (a, href) in enumerate(links, 1):
                       if tempo_esgotado():
@@ -314,9 +317,19 @@ jobs:
                               dur = extrair_duracao_pagina(vr.text)
                               vsoup = BeautifulSoup(vr.text,"html.parser")
                           except Exception: pass
-                      if dur == 0 or dur < MIN_DURACAO: continue
-                      if not passa_blacklist(titulo): continue
-                      if not eh_relevante(query, titulo): continue
+
+                      if dur == 0:
+                          print(f"      [{i}/{len(links)}] [dur?] {titulo}")
+                          stats["dur?"] += 1; continue
+                      if dur < MIN_DURACAO:
+                          print(f"      [{i}/{len(links)}] [<40min] {titulo} ({formatar_duracao(dur)})")
+                          stats["<40min"] += 1; continue
+                      if not passa_blacklist(titulo):
+                          print(f"      [{i}/{len(links)}] [blacklist] {titulo}")
+                          stats["blacklist"] += 1; continue
+                      if not eh_relevante(query, titulo):
+                          print(f"      [{i}/{len(links)}] [irrelevante] {titulo}")
+                          stats["irrelevante"] += 1; continue
 
                       thumb = ""
                       img = a.find("img")
@@ -328,13 +341,15 @@ jobs:
                           og = vsoup.find("meta", property="og:image")
                           if og: thumb = og.get("content","")
                       gerar_html(titulo, thumb, href, outdir)
-                      encontrados.add(titulo); n += 1
+                      encontrados.add(titulo); n += 1; stats["OK"] += 1
                       print(f"      [{i}/{len(links)}] [OK] {titulo} ({formatar_duracao(dur)})")
+
+                  print(f"      → Toky stats: OK={stats['OK']} <40min={stats['<40min']} "
+                        f"dur?={stats['dur?']} blacklist={stats['blacklist']} irrelevante={stats['irrelevante']}")
               except Exception as e:
                   print(f"      [ERRO Toky] {e}")
               return n
 
-          # ---------------- títulos acumulados ----------------
           def carregar_titulos():
               if not os.path.exists(ARQ_TITULOS): return set()
               with open(ARQ_TITULOS,"r",encoding="utf-8") as f:
@@ -345,7 +360,6 @@ jobs:
                   for t in sorted(titulos):
                       f.write(t + "\n")
 
-          # ---------------- main ----------------
           def main():
               filmes_txt = carregar_filmes_txt()
               entrada = os.environ.get("FILMES_INPUT", "").strip()
@@ -387,8 +401,9 @@ jobs:
                       print(f"\n⏰ Orçamento de tempo esgotado — parando no filme {i}")
                       break
 
-                  barra_progresso(total_proc + i - 1, total_geral, filme)
-                  print(f"\n[{i}/{len(lote)}] {filme}  (progresso: {total_proc + i}/{total_geral})")
+                  barra_progresso(i, len(lote), filme,
+                                  f"[fila: {total_proc + i - 1}/{total_geral}]")
+                  print(f"\n[{i}/{len(lote)}] {filme}  (fila: {total_proc + i}/{total_geral})")
 
                   a = buscar_tankietube(filme, "output", encontrados)
                   b = buscar_tokyvideo(filme, "output", encontrados)
@@ -419,7 +434,6 @@ jobs:
               print("════════════════════════════")
 
               salvar_estado(estado)
-
               with open("/tmp/faltam.txt","w") as f:
                   f.write(str(restantes))
 
@@ -430,7 +444,7 @@ jobs:
       - name: Executar busca
         env:
           FILMES_INPUT: ${{ github.event.inputs.filmes }}
-          LOTE: ${{ inputs.lote || 25 }}
+          LOTE: ${{ inputs.lote || 200 }}
           RESETAR: ${{ inputs.resetar || 'false' }}
           PYTHONUNBUFFERED: "1"
         run: python -u busca.py
@@ -474,7 +488,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_CHAIN }}
           REPO: ${{ github.repository }}
-          LOTE_IN: ${{ inputs.lote || '25' }}
+          LOTE_IN: ${{ inputs.lote || '200' }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "⚠️  PAT_CHAIN não configurado: sem auto-chain."
