@@ -25,7 +25,7 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: '0 */6 * * *' # A cada 6 horas
+    - cron: '0 */6 * * *'
 
 permissions:
   contents: write
@@ -305,7 +305,6 @@ jobs:
               q = palavras_significativas(query)
               if q:
                   tn = normalizar(titulo)
-                  # ⭐ Correção do underline que quebrava "Duna_ Parte Dois"
                   text_words = set(re.findall(r"[^\W_]+", tn))
                   if not all(palavra_bate(w, text_words) for w in q):
                       return False
@@ -518,11 +517,16 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: python -u busca.py
 
-      - name: Commit e push (com retry e rebase)
+      - name: Commit e push (com merge inteligente)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config pull.rebase true
+          
+          # ⭐ Correção do erro "Terminal is dumb"
+          export GIT_EDITOR=true
+          git config --global core.editor "true"
+          
           mkdir -p output
           touch titulos_encontrados.txt fila_estado.json
           git add output/ titulos_encontrados.txt fila_estado.json
@@ -530,11 +534,49 @@ jobs:
             echo "Nenhuma alteração."; exit 0
           fi
           git commit -m "chore: Tankie — novos filmes [skip ci] run=${{ github.run_id }}"
+          
           for i in 1 2 3 4 5; do
             echo "→ Push tentativa $i..."
-            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
-              echo "✅ Push OK."; exit 0
+            
+            if git pull --rebase origin "${GITHUB_REF_NAME}"; then
+              if git push origin "${GITHUB_REF_NAME}"; then
+                echo "✅ Push OK na tentativa $i."
+                exit 0
+              fi
+            else
+              echo "⚠️ Conflito detectado! Resolvendo automaticamente..."
+              # ⭐ RESOLUÇÃO DE CONFLITO AUTOMÁTICA
+              python - <<'EOF'
+          import json, os
+
+          if os.path.exists("fila_estado.json"):
+              try:
+                  with open("fila_estado.json", "r", encoding="utf-8") as f:
+                      local = json.load(f)
+              except:
+                  local = {"pendentes": [], "processados": [], "execucoes": 0, "ultima_execucao": None}
+              
+              with open("fila_estado.json", "w", encoding="utf-8") as f:
+                  json.dump(local, f, ensure_ascii=False, indent=2)
+
+          if os.path.exists("titulos_encontrados.txt"):
+              with open("titulos_encontrados.txt", "r", encoding="utf-8") as f:
+                  linhas = f.read().splitlines()
+              titulos = set(l.strip() for l in linhas if l.strip() and not l.startswith(("<<<<<<<", "=======", ">>>>>>>")))
+              with open("titulos_encontrados.txt", "w", encoding="utf-8") as f:
+                  for t in sorted(titulos):
+                      f.write(t + "\n")
+          EOF
+              
+              git add fila_estado.json titulos_encontrados.txt
+              GIT_EDITOR=true git rebase --continue
+              
+              if git push origin "${GITHUB_REF_NAME}"; then
+                echo "✅ Push OK após resolução de conflito."
+                exit 0
+              fi
             fi
+            
             echo "⚠️  Falhou, aguardando $((i*5))s..."
             sleep $((i*5))
           done
