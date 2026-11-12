@@ -1,4 +1,4 @@
-name: Buscar Filmes (Tokyvideo & TankieTube) — com fila
+name: Buscar Filmes (Tokyvideo & TankieTube) — fila + auto-chain
 
 on:
   workflow_dispatch:
@@ -25,7 +25,7 @@ on:
 
 permissions:
   contents: write
-  actions: write     # ⭐ necessário para o gh CLI disparar workflows
+  actions: write
 
 concurrency:
   group: busca-filmes
@@ -51,10 +51,24 @@ jobs:
       - name: Criar script de busca
         run: |
           cat << 'PYEOF' > busca.py
-          import os, re, json, time, unicodedata, requests
+          import os, re, json, time, sys, unicodedata, requests
           from datetime import datetime, timezone
           from bs4 import BeautifulSoup
           from html import escape as html_escape
+
+          # ⭐ line-buffering: logs aparecem em tempo real no GitHub Actions
+          try:
+              sys.stdout.reconfigure(line_buffering=True)
+              sys.stderr.reconfigure(line_buffering=True)
+          except Exception:
+              pass
+
+          # ⭐ wrapper global: todo print() já sai com flush + timestamp
+          _orig_print = print
+          def print(*args, **kwargs):
+              kwargs.setdefault("flush", True)
+              ts = datetime.now().strftime("%H:%M:%S")
+              _orig_print(f"[{ts}]", *args, **kwargs)
 
           MIN_DURACAO    = 40 * 60
           ARQ_ESTADO     = "fila_estado.json"
@@ -82,6 +96,7 @@ jobs:
               "the","an","of","in","on","at","to","for","with",
           }
 
+          # ---------------- utilidades ----------------
           def normalizar(t):
               t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
               return t.lower()
@@ -127,6 +142,16 @@ jobs:
           def tempo_esgotado():
               return (time.time() - INICIO) > LIMITE_SEG
 
+          # ⭐ barra de progresso em linha (usa write/flush p/ não poluir)
+          def barra_progresso(atual, total, filme=""):
+              pct = int(100 * atual / total) if total else 0
+              bloco = pct // 5
+              barra = "█" * bloco + "░" * (20 - bloco)
+              nome = (filme[:45] + "…") if len(filme) > 45 else filme
+              sys.stdout.write(f"\r[{barra}] {pct:3d}% ({atual}/{total}) {nome:<46}")
+              sys.stdout.flush()
+
+          # ---------------- HTML ----------------
           def gerar_html(titulo, thumb, link, outdir):
               os.makedirs(outdir, exist_ok=True)
               filename = os.path.join(outdir, slugify(titulo) + ".html")
@@ -156,6 +181,7 @@ jobs:
                   f.write(tpl.format(jl=json.dumps(json_ld,ensure_ascii=False,indent=2),
                                      t=html_escape(titulo), l=html_escape(link), th=html_escape(thumb)))
 
+          # ---------------- fila ----------------
           def carregar_filmes_txt():
               if not os.path.exists(ARQ_FILMES_TXT): return []
               with open(ARQ_FILMES_TXT,"r",encoding="utf-8") as f:
@@ -182,6 +208,7 @@ jobs:
               estado["pendentes"].extend(novos)
               return novos
 
+          # ---------------- duração ----------------
           def extrair_duracao_pagina(html):
               soup = BeautifulSoup(html,"html.parser")
               m = soup.find("meta",{"itemprop":"duration"})
@@ -210,6 +237,7 @@ jobs:
               m = re.search(r'"duration"\s*:\s*"?(PT[\dHMS]+)"?', html)
               return iso8601_para_segundos(m.group(1)) if m else 0
 
+          # ---------------- sites ----------------
           def buscar_tankietube(query, outdir, encontrados):
               n = 0
               try:
@@ -227,9 +255,9 @@ jobs:
                       if name and link:
                           gerar_html(name, thumb, link, outdir)
                           encontrados.add(name); n += 1
-                          print(f"    [OK] {name} ({formatar_duracao(dur)})")
+                          print(f"      [OK] {name} ({formatar_duracao(dur)})")
               except Exception as e:
-                  print(f"    [ERRO Tankie] {e}")
+                  print(f"      [ERRO Tankie] {e}")
               return n
 
           def buscar_tokyvideo(query, outdir, encontrados):
@@ -251,11 +279,11 @@ jobs:
                       elif not href.startswith("http"): continue
                       if href in vistos: continue
                       vistos.add(href); links.append((a, href))
-                  print(f"    {len(links)} link(s) na busca")
+                  print(f"      Tokyvideo: {len(links)} link(s) na busca")
 
                   for i, (a, href) in enumerate(links, 1):
                       if tempo_esgotado():
-                          print("    ⏰ tempo esgotado no meio do Tokyvideo"); break
+                          print("      ⏰ tempo esgotado no meio do Tokyvideo"); break
                       dur, titulo = 0, (a.get("title") or "").strip()
                       if not titulo:
                           img = a.find("img")
@@ -301,11 +329,12 @@ jobs:
                           if og: thumb = og.get("content","")
                       gerar_html(titulo, thumb, href, outdir)
                       encontrados.add(titulo); n += 1
-                      print(f"    [{i}/{len(links)}] [OK] {titulo} ({formatar_duracao(dur)})")
+                      print(f"      [{i}/{len(links)}] [OK] {titulo} ({formatar_duracao(dur)})")
               except Exception as e:
-                  print(f"    [ERRO Toky] {e}")
+                  print(f"      [ERRO Toky] {e}")
               return n
 
+          # ---------------- títulos acumulados ----------------
           def carregar_titulos():
               if not os.path.exists(ARQ_TITULOS): return set()
               with open(ARQ_TITULOS,"r",encoding="utf-8") as f:
@@ -316,6 +345,7 @@ jobs:
                   for t in sorted(titulos):
                       f.write(t + "\n")
 
+          # ---------------- main ----------------
           def main():
               filmes_txt = carregar_filmes_txt()
               entrada = os.environ.get("FILMES_INPUT", "").strip()
@@ -334,8 +364,8 @@ jobs:
               if novos:
                   print(f"➕ {len(novos)} novo(s) filme(s) adicionado(s) à fila")
 
-              total_geral  = len(estado["processados"]) + len(estado["pendentes"])
-              total_proc   = len(estado["processados"])
+              total_geral = len(estado["processados"]) + len(estado["pendentes"])
+              total_proc  = len(estado["processados"])
 
               if not estado["pendentes"]:
                   print("\n✅ Fila vazia — nada a processar.")
@@ -356,10 +386,13 @@ jobs:
                   if tempo_esgotado():
                       print(f"\n⏰ Orçamento de tempo esgotado — parando no filme {i}")
                       break
-                  print(f"[{i}/{len(lote)}] {filme}  (progresso: {total_proc + i}/{total_geral})")
+
+                  barra_progresso(total_proc + i - 1, total_geral, filme)
+                  print(f"\n[{i}/{len(lote)}] {filme}  (progresso: {total_proc + i}/{total_geral})")
+
                   a = buscar_tankietube(filme, "output", encontrados)
                   b = buscar_tokyvideo(filme, "output", encontrados)
-                  print(f"    Tankie: {a} | Toky: {b}\n")
+                  print(f"      Tankie: {a} | Toky: {b}")
 
                   estado["pendentes"].remove(filme)
                   estado["processados"].append(filme)
@@ -372,7 +405,7 @@ jobs:
               total_proc = len(estado["processados"])
               restantes  = len(estado["pendentes"])
 
-              print("══════════ RESUMO ══════════")
+              print("\n══════════ RESUMO ══════════")
               print(f"Processados nesta execução : {processados_agora}")
               print(f"Total processados até agora: {total_proc}/{total_geral}")
               print(f"Restantes na fila          : {restantes}")
@@ -387,7 +420,6 @@ jobs:
 
               salvar_estado(estado)
 
-              # ⭐ grava contagem para o step de auto-chain
               with open("/tmp/faltam.txt","w") as f:
                   f.write(str(restantes))
 
@@ -400,7 +432,8 @@ jobs:
           FILMES_INPUT: ${{ github.event.inputs.filmes }}
           LOTE: ${{ inputs.lote || 25 }}
           RESETAR: ${{ inputs.resetar || 'false' }}
-        run: python busca.py
+          PYTHONUNBUFFERED: "1"
+        run: python -u busca.py
 
       - name: Commit e push (com retry e rebase)
         run: |
@@ -431,7 +464,6 @@ jobs:
           echo "❌ Push falhou após 5 tentativas."
           exit 1
 
-      # ⭐ NOVO: dispara a próxima run se sobrar fila
       - name: Disparar próxima run (se fila não vazia)
         if: |
           success() && (
@@ -446,7 +478,6 @@ jobs:
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "⚠️  PAT_CHAIN não configurado: sem auto-chain."
-            echo "   Crie em Settings → Secrets → Actions (PAT clássico com escopo 'workflow')."
             exit 0
           fi
 
@@ -457,7 +488,6 @@ jobs:
             exit 0
           fi
 
-          # Anti-loop: no máximo 60 encadeamentos na última hora
           LIMITE_ISO=$(date -u -d '60 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
           RECENTES=$(gh run list --workflow="busca_filmes.yml" --event workflow_dispatch --limit 100 \
             --json createdAt --jq "[.[] | select(.createdAt > \"$LIMITE_ISO\")] | length" \
