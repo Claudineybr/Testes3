@@ -45,6 +45,10 @@ jobs:
         with:
           python-version: '3.10'
 
+      # ⭐ CORREÇÃO: instalar dependência antes de rodar o script
+      - name: Instalar dependências
+        run: pip install requests
+
       - name: Gerar lista via TMDB
         env:
           TMDB_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -70,7 +74,6 @@ jobs:
           vistos = set()
           linhas = []
 
-          # Cabeçalho
           linhas.append(f"# Gerado automaticamente via TMDB")
           linhas.append(f"# Ordenar por: {ORD} | Anos: {ANO_MIN}–{ANO_MAX} | Idioma: {LANG}")
           linhas.append("")
@@ -108,7 +111,7 @@ jobs:
 
               if len(vistos) >= QTD:
                   break
-              time.sleep(0.26)  # respeita rate limit (~4 req/s)
+              time.sleep(0.26)
 
           with open("filmes.txt", "w", encoding="utf-8") as f:
               f.write("\n".join(linhas) + "\n")
