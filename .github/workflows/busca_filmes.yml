@@ -1,12 +1,8 @@
-name: Buscar Filmes — fila + auto-chain (OK.ru + PeerTube)
+name: Buscar Filmes — PeerTube (fila + auto-chain)
 
 on:
   workflow_dispatch:
     inputs:
-      fontes:
-        description: 'Fontes (okru, peertube)'
-        required: true
-        default: 'okru, peertube'
       lote:
         description: 'Quantos filmes processar (1-500)'
         type: number
@@ -81,7 +77,15 @@ jobs:
           LOTE          = max(1, min(500, int(os.environ.get("LOTE", "200") or "200")))
           RESETAR       = os.environ.get("RESETAR", "").lower() == "true"
           ESTRITO_PTBR  = os.environ.get("ESTRITO_PTBR", "false").lower() == "true"
-          FONTES = [f.strip().lower() for f in (os.environ.get("FONTES", "okru,peertube") or "okru,peertube").split(",") if f.strip()]
+
+          # ⭐ Instâncias PeerTube (configuráveis via env)
+          PEERTUBE_INSTANCIAS = [
+              i.strip() for i in (
+                  os.environ.get("PEERTUBE_INSTANCIAS",
+                      "framatube.org,tube.tchncs.de,makertube.net,spectra.video,tilvids.com"
+                  ) or ""
+              ).split(",") if i.strip()
+          ]
 
           PT_BR_MARKERS = ["dublado","dublagem","dublada","dublados","pt-br","ptbr","pt br","pt/br","portugues","portugues-br","[pt]","dual audio"]
           EN_SUB_MARKERS = ["legendado","legendada","legendados","leg.","[leg]","(leg)","sub ","[sub]","(sub)","subtitled","eng sub","eng subs","english","[en]","(en)","ingles","original"," ov","ov)"]
@@ -151,6 +155,8 @@ jobs:
               "globoplay", "globo video", "review", "reaction", "making of",
               "behind the scenes", "top 10", "top 5 ", "resumo", "resenha",
               "opinião", "opiniao", "meditantes", "meditação",
+              "fosdem", "conference", "conferencia", "keynote", "talk",
+              "palestra", "webinar", "coding", "programming", "developer",
           ]
 
           STOPWORDS = {
@@ -251,6 +257,14 @@ jobs:
                   return True, "sem marcador (assumido PT)"
               return True, ""
 
+          # ⭐ NOVO: prefixo comum entre duas palavras
+          def comum_prefixo(a, b):
+              n = min(len(a), len(b))
+              for i in range(n):
+                  if a[i] != b[i]:
+                      return i
+              return n
+
           def palavra_bate(word, text_words):
               if word in text_words: return True
               if word.isdigit() and word in NUMEROS:
@@ -261,10 +275,17 @@ jobs:
                   if any(a in text_words for a in ALIASES[word]): return True
               for en_w, pt_aliases in ALIASES.items():
                   if word in pt_aliases and en_w in text_words: return True
-              if len(word) >= 5:
+
+              # ⭐ FIX: prefixo comum ≥6 chars E ≥70% da palavra menor
+              # "interestelar" vs "internet": comum="inter"=5 → NÃO bate ✓
+              # "parasita" vs "parasite": comum="parasit"=7 → bate ✓
+              if len(word) >= 6:
                   for tw in text_words:
-                      if len(tw) >= 4 and (tw.startswith(word[:5]) or word.startswith(tw[:5])):
-                          return True
+                      if len(tw) >= 6:
+                          cp = comum_prefixo(word, tw)
+                          shorter = min(len(word), len(tw))
+                          if cp >= 6 and (cp / shorter) >= 0.7:
+                              return True
               return False
 
           def eh_relevante(query, titulo):
@@ -370,68 +391,26 @@ jobs:
               estado["pendentes"].extend(novos)
               return novos
 
-          def extrair_duracao_pagina(html):
-              soup = BeautifulSoup(html,"html.parser")
-              m = soup.find("meta",{"itemprop":"duration"})
-              if m and m.get("content"): return iso8601_para_segundos(m["content"])
-              m = soup.find("meta",{"property":"og:video:duration"})
-              if m and m.get("content"):
-                  try: return int(m["content"])
-                  except ValueError: pass
-              for sc in soup.find_all("script", type="application/ld+json"):
-                  try:
-                      d = json.loads(sc.string or "")
-                      for it in (d if isinstance(d,list) else [d]):
-                          if isinstance(it,dict) and it.get("duration"):
-                              return iso8601_para_segundos(it["duration"])
-                  except Exception: pass
-              m = re.search(r'"duration"\s*:\s*"?(PT[\dHMS]+)"?', html)
-              return iso8601_para_segundos(m.group(1)) if m else 0
-
-          # ---------- FONTE 1: OK.RU ----------
-          def buscar_okru(query, outdir, encontrados):
-              n = 0
-              headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-              try:
-                  r = requests.get("https://ok.ru/video/search", params={"st.query": query}, headers=headers, timeout=30)
-                  r.raise_for_status()
-                  soup = BeautifulSoup(r.text, "html.parser")
-                  cards = soup.select('div.video-card')
-                  print(f"      OK.ru: {len(cards)} card(s) visíveis")
-                  for card in cards:
-                      titulo_elem = card.select_one('.video-card_normative, .video-card__title')
-                      if not titulo_elem: continue
-                      titulo = titulo_elem.get_text(strip=True)
-                      link_elem = card.select_one('a[href*="/video/"]')
-                      if not link_elem: continue
-                      link = "https://ok.ru" + link_elem['href']
-                      dur_elem = card.select_one('.video-card__duration')
-                      dur_seg = parse_duration_text(dur_elem.get_text(strip=True)) if dur_elem else 0
-                      if dur_seg < MIN_DURACAO: continue
-                      if not passa_blacklist(titulo) or not eh_relevante(query, titulo): continue
-                      pt_ok, motivo = eh_ptbr(titulo)
-                      if not pt_ok: continue
-                      thumb_elem = card.select_one('img.video-card__preview')
-                      thumb = thumb_elem.get('src', '') if thumb_elem else ""
-                      gerar_html(titulo, thumb, link, outdir)
-                      encontrados.add(titulo); n += 1
-                      print(f"      [OK.ru] [OK] {titulo} ({formatar_duracao(dur_seg)}) [{motivo}]")
-              except Exception as e:
-                  print(f"      [ERRO OK.ru] {e}")
-              return n
-
-          # ---------- FONTE 2: PEERTUBE (múltiplas instâncias) ----------
+          # ---------- PEERTUBE (múltiplas instâncias) ----------
           def buscar_peertube(query, outdir, encontrados):
               n = 0
-              instancias = ["framatube.org", "tube.tchncs.de", "makertube.net", "spectra.video"]
-              for instancia in instancias:
+              for instancia in PEERTUBE_INSTANCIAS:
                   try:
                       r = requests.get(f"https://{instancia}/api/v1/search/videos",
-                                       params={"search": query, "count": 10}, timeout=30)
-                      r.raise_for_status()
-                      for v in r.json().get("data", []):
-                          name, dur = v.get("name", ""), v.get("duration", 0) or 0
-                          if dur < MIN_DURACAO or not passa_blacklist(name) or not eh_relevante(query, name): continue
+                                       params={"search": query, "count": 10}, timeout=15)
+                      if r.status_code != 200:
+                          print(f"      [{instancia}] HTTP {r.status_code}")
+                          continue
+                      videos = r.json().get("data", [])
+                      if not videos:
+                          continue
+                      aceitos_inst = 0
+                      for v in videos:
+                          name = v.get("name", "")
+                          dur = v.get("duration", 0) or 0
+                          if dur < MIN_DURACAO: continue
+                          if not passa_blacklist(name): continue
+                          if not eh_relevante(query, name): continue
                           pt_ok, motivo = eh_ptbr(name)
                           if not pt_ok: continue
                           link = v.get("url") or f"https://{instancia}/w/{v.get('shortUUID','')}"
@@ -439,10 +418,14 @@ jobs:
                           thumb = f"https://{instancia}{tp}" if tp else ""
                           if name and link:
                               gerar_html(name, thumb, link, outdir)
-                              encontrados.add(name); n += 1
+                              encontrados.add(name); n += 1; aceitos_inst += 1
                               print(f"      [{instancia}] [OK] {name} ({formatar_duracao(dur)}) [{motivo}]")
+                      if aceitos_inst > 0:
+                          print(f"      [{instancia}] {aceitos_inst}/{len(videos)} aceitos")
+                  except requests.exceptions.Timeout:
+                      print(f"      [{instancia}] timeout")
                   except Exception as e:
-                      print(f"      [{instancia}] [ERRO] {e}")
+                      print(f"      [{instancia}] erro: {str(e)[:60]}")
               return n
 
           def carregar_titulos():
@@ -471,7 +454,8 @@ jobs:
               if novos:
                   print(f"➕ {len(novos)} novo(s) filme(s) adicionado(s) à fila")
 
-              print(f"🎙️ Modo PT-BR: {'ESTRITO' if ESTRITO_PTBR else 'PERMISSIVO'} | Fontes: {', '.join(FONTES)}")
+              print(f"🎙️ Modo PT-BR: {'ESTRITO' if ESTRITO_PTBR else 'PERMISSIVO'}")
+              print(f"📡 PeerTube: {len(PEERTUBE_INSTANCIAS)} instância(s)")
 
               total_geral = len(estado["processados"]) + len(estado["pendentes"])
               total_proc  = len(estado["processados"])
@@ -498,12 +482,8 @@ jobs:
                                   f"[fila: {total_proc + i - 1}/{total_geral}]")
                   print(f"\n[{i}/{len(lote)}] {filme}  (fila: {total_proc + i}/{total_geral})")
 
-                  total_fonte = 0
-                  if "okru" in FONTES:
-                      total_fonte += buscar_okru(filme, "output", encontrados)
-                  if "peertube" in FONTES:
-                      total_fonte += buscar_peertube(filme, "output", encontrados)
-                  print(f"      → Total desta busca: {total_fonte}")
+                  total_fonte = buscar_peertube(filme, "output", encontrados)
+                  print(f"      → Total: {total_fonte}")
 
                   estado["pendentes"].remove(filme)
                   estado["processados"].append(filme)
@@ -538,7 +518,6 @@ jobs:
           LOTE: ${{ inputs.lote || 200 }}
           RESETAR: ${{ inputs.resetar || 'false' }}
           ESTRITO_PTBR: ${{ inputs.estrito_ptbr || 'false' }}
-          FONTES: ${{ inputs.fontes || 'okru,peertube' }}
           PYTHONUNBUFFERED: "1"
         run: python -u busca.py
 
@@ -553,7 +532,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "Nenhuma alteração."; exit 0
           fi
-          git commit -m "chore: fila processada (fontes: ${{ inputs.fontes }}) [skip ci] run=${{ github.run_id }}"
+          git commit -m "chore: fila processada (PeerTube) [skip ci] run=${{ github.run_id }}"
           for i in 1 2 3 4 5; do
             echo "→ Push tentativa $i..."
             if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
@@ -589,5 +568,5 @@ jobs:
           if [ "${RECENTES:-0}" -ge 60 ]; then exit 0; fi
           sleep 30
           gh workflow run "busca_filmes.yml" --repo "$REPO" --ref "${GITHUB_REF_NAME}" \
-            -f auto_run=true -f lote="${LOTE_IN}" -f resetar=false -f filmes="" -f estrito_ptbr=false -f fontes="okru,peertube"
+            -f auto_run=true -f lote="${LOTE_IN}" -f resetar=false -f filmes="" -f estrito_ptbr=false
           echo "✅ Próxima run disparada."
