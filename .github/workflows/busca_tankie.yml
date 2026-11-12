@@ -1,10 +1,14 @@
-name: Buscar Filmes — PeerTube (fila + auto-chain)
+name: Buscar Filmes — Tankie.Tube (Fila + Auto-chain)
 
 on:
   workflow_dispatch:
     inputs:
+      filmes:
+        description: 'Lista avulsa separada por vírgula (adiciona à fila)'
+        required: false
+        default: ''
       lote:
-        description: 'Quantos filmes processar (1-500)'
+        description: 'Quantos filmes processar NESTA execução (1-500)'
         type: number
         default: 200
         required: false
@@ -21,14 +25,14 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 */6 * * *' # A cada 6 horas
 
 permissions:
   contents: write
   actions: write
 
 concurrency:
-  group: busca-filmes
+  group: busca-filmes-tankie
   cancel-in-progress: false
 
 jobs:
@@ -52,7 +56,7 @@ jobs:
           cat << 'PYEOF' > busca.py
           import os, re, json, time, sys, unicodedata, requests
           from datetime import datetime, timezone
-          from bs4 import BeautifulSoup
+          from difflib import SequenceMatcher
           from html import escape as html_escape
 
           try:
@@ -77,15 +81,6 @@ jobs:
           LOTE          = max(1, min(500, int(os.environ.get("LOTE", "200") or "200")))
           RESETAR       = os.environ.get("RESETAR", "").lower() == "true"
           ESTRITO_PTBR  = os.environ.get("ESTRITO_PTBR", "false").lower() == "true"
-
-          # ⭐ Instâncias PeerTube (configuráveis via env)
-          PEERTUBE_INSTANCIAS = [
-              i.strip() for i in (
-                  os.environ.get("PEERTUBE_INSTANCIAS",
-                      "framatube.org,tube.tchncs.de,makertube.net,spectra.video,tilvids.com"
-                  ) or ""
-              ).split(",") if i.strip()
-          ]
 
           PT_BR_MARKERS = ["dublado","dublagem","dublada","dublados","pt-br","ptbr","pt br","pt/br","portugues","portugues-br","[pt]","dual audio"]
           EN_SUB_MARKERS = ["legendado","legendada","legendados","leg.","[leg]","(leg)","sub ","[sub]","(sub)","subtitled","eng sub","eng subs","english","[en]","(en)","ingles","original"," ov","ov)"]
@@ -155,8 +150,9 @@ jobs:
               "globoplay", "globo video", "review", "reaction", "making of",
               "behind the scenes", "top 10", "top 5 ", "resumo", "resenha",
               "opinião", "opiniao", "meditantes", "meditação",
-              "fosdem", "conference", "conferencia", "keynote", "talk",
+              "fosdem", "conference", "conferencia", "keynote",
               "palestra", "webinar", "coding", "programming", "developer",
+              "livestream", "playthrough", "play-through",
           ]
 
           STOPWORDS = {
@@ -221,6 +217,9 @@ jobs:
               t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
               return t.lower()
 
+          def similaridade(a, b):
+              return SequenceMatcher(None, normalizar(a), normalizar(b)).ratio()
+
           def eh_ano(w):
               return w.isdigit() and len(w) == 4 and 1900 <= int(w) <= 2099
 
@@ -230,21 +229,33 @@ jobs:
                       if w not in STOPWORDS and not eh_ano(w)
                       and (len(w) >= 4 or w.isdigit())]
 
+          def extrair_ano(query):
+              m = re.search(r'\((\d{4})\)|\[(\d{4})\]', query)
+              if m:
+                  for g in m.groups():
+                      if g and 1900 <= int(g) <= 2099:
+                          return int(g)
+              return None
+
+          def ano_bate(ano_esperado, titulo):
+              if ano_esperado is None:
+                  return "sem_ano_query"
+              anos_titulo = [int(y) for y in re.findall(r'\b(19\d{2}|20\d{2})\b', titulo)]
+              if not anos_titulo:
+                  return "sem_ano_titulo"
+              if any(abs(a - ano_esperado) <= 1 for a in anos_titulo):
+                  return "match"
+              return "diferente"
+
           def classificar_audio(titulo):
               tn = normalizar(titulo)
-              if any(p in tn for p in EN_SUB_MARKERS):
-                  return "en"
-              if any(p in tn for p in PT_BR_MARKERS):
-                  return "pt"
-              if any(c in titulo.lower() for c in "áàâãéêíóôõúüçñ"):
-                  return "pt"
+              if any(p in tn for p in EN_SUB_MARKERS): return "en"
+              if any(p in tn for p in PT_BR_MARKERS): return "pt"
+              if any(c in titulo.lower() for c in "áàâãéêíóôõúüçñ"): return "pt"
               words = set(re.findall(r"[^\W_]+", tn))
-              if words & PT_INDICATORS:
-                  return "pt"
-              if len(words & EN_COMMON) >= 2:
-                  return "en"
-              if len(words) <= 2:
-                  return "pt?"
+              if words & PT_INDICATORS: return "pt"
+              if len(words & EN_COMMON) >= 2: return "en"
+              if len(words) <= 2: return "pt?"
               return "?"
 
           def eh_ptbr(titulo):
@@ -257,7 +268,6 @@ jobs:
                   return True, "sem marcador (assumido PT)"
               return True, ""
 
-          # ⭐ NOVO: prefixo comum entre duas palavras
           def comum_prefixo(a, b):
               n = min(len(a), len(b))
               for i in range(n):
@@ -275,10 +285,6 @@ jobs:
                   if any(a in text_words for a in ALIASES[word]): return True
               for en_w, pt_aliases in ALIASES.items():
                   if word in pt_aliases and en_w in text_words: return True
-
-              # ⭐ FIX: prefixo comum ≥6 chars E ≥70% da palavra menor
-              # "interestelar" vs "internet": comum="inter"=5 → NÃO bate ✓
-              # "parasita" vs "parasite": comum="parasit"=7 → bate ✓
               if len(word) >= 6:
                   for tw in text_words:
                       if len(tw) >= 6:
@@ -289,33 +295,27 @@ jobs:
               return False
 
           def eh_relevante(query, titulo):
+              ano = extrair_ano(query)
+              ano_status = ano_bate(ano, titulo)
+              if ano_status == "diferente":
+                  return False
+              if ano_status == "sem_ano_titulo":
+                  if similaridade(query, titulo) < 0.6:
+                      return False
               q = palavras_significativas(query)
-              if not q:
-                  n = re.sub(r"[^\w\s]", " ", normalizar(query))
-                  q = [w for w in n.split() if w.isdigit()]
-                  if not q: return True
-              tn = normalizar(titulo)
-              text_words = set(re.findall(r"[^\W_]+", tn))
-              return all(palavra_bate(w, text_words) for w in q)
+              if q:
+                  tn = normalizar(titulo)
+                  # ⭐ Correção do underline que quebrava "Duna_ Parte Dois"
+                  text_words = set(re.findall(r"[^\W_]+", tn))
+                  if not all(palavra_bate(w, text_words) for w in q):
+                      return False
+              if similaridade(query, titulo) < 0.4:
+                  return False
+              return True
 
           def passa_blacklist(titulo):
               tn = normalizar(titulo)
               return not any(n in tn for n in BLACKLIST)
-
-          def eh_duracao(text):
-              return bool(re.match(r'^\d{1,2}:\d{2}(:\d{2})?$', text.strip()))
-
-          def parse_duration_text(text):
-              m = re.match(r'^(\d{1,2}):(\d{2})(?::(\d{2}))?$', text.strip())
-              if not m: return 0
-              a,b,c = m.groups()
-              return int(a)*3600+int(b)*60+int(c) if c else int(a)*60+int(b)
-
-          def iso8601_para_segundos(iso):
-              if not iso: return 0
-              m = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', iso)
-              if not m: return 0
-              return int(m.group(1) or 0)*3600 + int(m.group(2) or 0)*60 + int(m.group(3) or 0)
 
           def formatar_duracao(seg):
               h,m,s = seg//3600,(seg%3600)//60,seg%60
@@ -362,26 +362,26 @@ jobs:
               <div style="position:absolute;top:12px;right:12px;background:#ff003c;padding:6px 12px;border-radius:20px;font-size:11px;color:#fff;font-weight:bold;">HD</div>
             </a>
           </div></body></html>"""
-              with open(filename,"w",encoding="utf-8") as f:
-                  f.write(tpl.format(jl=json.dumps(json_ld,ensure_ascii=False,indent=2),
+              with open(filename, "w", encoding="utf-8") as f:
+                  f.write(tpl.format(jl=json.dumps(json_ld, ensure_ascii=False, indent=2),
                                      t=html_escape(titulo), l=html_escape(link), th=html_escape(thumb)))
 
           def carregar_filmes_txt():
               if not os.path.exists(ARQ_FILMES_TXT): return []
-              with open(ARQ_FILMES_TXT,"r",encoding="utf-8") as f:
+              with open(ARQ_FILMES_TXT, "r", encoding="utf-8") as f:
                   return [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
 
           def carregar_estado():
               if os.path.exists(ARQ_ESTADO):
                   try:
-                      with open(ARQ_ESTADO,"r",encoding="utf-8") as f:
+                      with open(ARQ_ESTADO, "r", encoding="utf-8") as f:
                           return json.load(f)
                   except Exception: pass
               return {"pendentes": [], "processados": [], "execucoes": 0, "ultima_execucao": None}
 
           def salvar_estado(estado):
               estado["ultima_execucao"] = datetime.now(timezone.utc).isoformat()
-              with open(ARQ_ESTADO,"w",encoding="utf-8") as f:
+              with open(ARQ_ESTADO, "w", encoding="utf-8") as f:
                   json.dump(estado, f, ensure_ascii=False, indent=2)
 
           def sincronizar(estado, filmes_txt):
@@ -391,20 +391,14 @@ jobs:
               estado["pendentes"].extend(novos)
               return novos
 
-          # ---------- PEERTUBE (múltiplas instâncias) ----------
-          def buscar_peertube(query, outdir, encontrados):
+          def buscar_tankietube(query, outdir, encontrados):
               n = 0
-              for instancia in PEERTUBE_INSTANCIAS:
+              for tentativa in range(3):
                   try:
-                      r = requests.get(f"https://{instancia}/api/v1/search/videos",
-                                       params={"search": query, "count": 10}, timeout=15)
-                      if r.status_code != 200:
-                          print(f"      [{instancia}] HTTP {r.status_code}")
-                          continue
+                      r = requests.get("https://tankie.tube/api/v1/search/videos",
+                                       params={"search": query, "count": 10}, timeout=30)
+                      r.raise_for_status()
                       videos = r.json().get("data", [])
-                      if not videos:
-                          continue
-                      aceitos_inst = 0
                       for v in videos:
                           name = v.get("name", "")
                           dur = v.get("duration", 0) or 0
@@ -413,28 +407,32 @@ jobs:
                           if not eh_relevante(query, name): continue
                           pt_ok, motivo = eh_ptbr(name)
                           if not pt_ok: continue
-                          link = v.get("url") or f"https://{instancia}/w/{v.get('shortUUID','')}"
+                          link = v.get("url") or f"https://tankie.tube/w/{v.get('shortUUID','')}"
                           tp = v.get("thumbnailPath") or v.get("previewPath") or ""
-                          thumb = f"https://{instancia}{tp}" if tp else ""
+                          thumb = f"https://tankie.tube{tp}" if tp else ""
                           if name and link:
                               gerar_html(name, thumb, link, outdir)
-                              encontrados.add(name); n += 1; aceitos_inst += 1
-                              print(f"      [{instancia}] [OK] {name} ({formatar_duracao(dur)}) [{motivo}]")
-                      if aceitos_inst > 0:
-                          print(f"      [{instancia}] {aceitos_inst}/{len(videos)} aceitos")
+                              encontrados.add(name); n += 1
+                              print(f"      [OK] {name} ({formatar_duracao(dur)}) [{motivo}]")
+                      return n
                   except requests.exceptions.Timeout:
-                      print(f"      [{instancia}] timeout")
+                      if tentativa < 2:
+                          print(f"      [timeout] tentando novamente ({tentativa+2}/3)...")
+                          time.sleep(3)
+                      else:
+                          print(f"      [ERRO] timeout após 3 tentativas")
                   except Exception as e:
-                      print(f"      [{instancia}] erro: {str(e)[:60]}")
+                      print(f"      [ERRO] {e}")
+                      break
               return n
 
           def carregar_titulos():
               if not os.path.exists(ARQ_TITULOS): return set()
-              with open(ARQ_TITULOS,"r",encoding="utf-8") as f:
+              with open(ARQ_TITULOS, "r", encoding="utf-8") as f:
                   return {l.strip() for l in f if l.strip()}
 
           def salvar_titulos(titulos):
-              with open(ARQ_TITULOS,"w",encoding="utf-8") as f:
+              with open(ARQ_TITULOS, "w", encoding="utf-8") as f:
                   for t in sorted(titulos):
                       f.write(t + "\n")
 
@@ -455,7 +453,6 @@ jobs:
                   print(f"➕ {len(novos)} novo(s) filme(s) adicionado(s) à fila")
 
               print(f"🎙️ Modo PT-BR: {'ESTRITO' if ESTRITO_PTBR else 'PERMISSIVO'}")
-              print(f"📡 PeerTube: {len(PEERTUBE_INSTANCIAS)} instância(s)")
 
               total_geral = len(estado["processados"]) + len(estado["pendentes"])
               total_proc  = len(estado["processados"])
@@ -482,13 +479,13 @@ jobs:
                                   f"[fila: {total_proc + i - 1}/{total_geral}]")
                   print(f"\n[{i}/{len(lote)}] {filme}  (fila: {total_proc + i}/{total_geral})")
 
-                  total_fonte = buscar_peertube(filme, "output", encontrados)
-                  print(f"      → Total: {total_fonte}")
+                  a = buscar_tankietube(filme, "output", encontrados)
+                  print(f"      → Total: {a}")
 
                   estado["pendentes"].remove(filme)
                   estado["processados"].append(filme)
                   processados_agora += 1
-                  gerados_agora += total_fonte
+                  gerados_agora += a
                   estado["execucoes"] += 1
                   salvar_estado(estado)
                   salvar_titulos(encontrados)
@@ -521,7 +518,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: python -u busca.py
 
-      - name: Commit e push
+      - name: Commit e push (com retry e rebase)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -532,12 +529,13 @@ jobs:
           if git diff --cached --quiet; then
             echo "Nenhuma alteração."; exit 0
           fi
-          git commit -m "chore: fila processada (PeerTube) [skip ci] run=${{ github.run_id }}"
+          git commit -m "chore: Tankie — novos filmes [skip ci] run=${{ github.run_id }}"
           for i in 1 2 3 4 5; do
             echo "→ Push tentativa $i..."
             if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
               echo "✅ Push OK."; exit 0
             fi
+            echo "⚠️  Falhou, aguardando $((i*5))s..."
             sleep $((i*5))
           done
           exit 1
@@ -561,12 +559,12 @@ jobs:
           echo "📊 Faltam: $FALTAM"
           if [ "${FALTAM:-0}" -le 0 ]; then exit 0; fi
           LIMITE_ISO=$(date -u -d '60 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
-          RECENTES=$(gh run list --workflow="busca_filmes.yml" --event workflow_dispatch --limit 100 \
+          RECENTES=$(gh run list --workflow="busca_tankie.yml" --event workflow_dispatch --limit 100 \
             --json createdAt --jq "[.[] | select(.createdAt > \"$LIMITE_ISO\")] | length" \
             --repo "$REPO" 2>/dev/null || echo 0)
           echo "🔁 Runs na última hora: $RECENTES"
           if [ "${RECENTES:-0}" -ge 60 ]; then exit 0; fi
           sleep 30
-          gh workflow run "busca_filmes.yml" --repo "$REPO" --ref "${GITHUB_REF_NAME}" \
+          gh workflow run "busca_tankie.yml" --repo "$REPO" --ref "${GITHUB_REF_NAME}" \
             -f auto_run=true -f lote="${LOTE_IN}" -f resetar=false -f filmes="" -f estrito_ptbr=false
           echo "✅ Próxima run disparada."
