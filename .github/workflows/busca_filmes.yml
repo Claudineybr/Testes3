@@ -1,4 +1,4 @@
-name: Buscar Filmes (Tokyvideo & TankieTube) — fila + auto-chain + PT-BR
+name: Buscar Filmes — fila + auto-chain + PT-BR
 
 on:
   workflow_dispatch:
@@ -8,22 +8,22 @@ on:
         required: false
         default: ''
       lote:
-        description: 'Quantos filmes processar nesta execução (1-500)'
+        description: 'Quantos filmes processar (1-500)'
         type: number
         default: 200
         required: false
       resetar:
-        description: '⚠️ Zerar a fila (recomeçar do zero)'
+        description: '⚠️ Zerar a fila'
         type: boolean
         default: false
       auto_run:
-        description: 'Disparar próxima run automaticamente se sobrar fila'
+        description: 'Disparar próxima run se sobrar fila'
         type: boolean
         default: false
       estrito_ptbr:
-        description: 'Rejeitar títulos sem marcador PT-BR (mais rigoroso)'
+        description: 'Modo estrito (rejeita títulos sem indicador PT)'
         type: boolean
-        default: true
+        default: false
   schedule:
     - cron: '0 */6 * * *'
 
@@ -39,7 +39,6 @@ jobs:
   buscar:
     runs-on: ubuntu-latest
     timeout-minutes: 350
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -81,143 +80,78 @@ jobs:
 
           LOTE          = max(1, min(500, int(os.environ.get("LOTE", "200") or "200")))
           RESETAR       = os.environ.get("RESETAR", "").lower() == "true"
-          ESTRITO_PTBR  = os.environ.get("ESTRITO_PTBR", "true").lower() == "true"
+          ESTRITO_PTBR  = os.environ.get("ESTRITO_PTBR", "false").lower() == "true"
 
-          # ⭐ Marcadores fortes de áudio PT-BR
           PT_BR_MARKERS = [
               "dublado", "dublagem", "dublada", "dublados",
               "pt-br", "ptbr", "pt br", "pt/br",
-              "portugues", "portugues-br", "[pt]",
-              "br-dub", "dual audio", "dual audio",
+              "portugues", "portugues-br", "[pt]", "dual audio",
           ]
 
-          # ⭐ Marcadores de áudio EN/legendado
           EN_SUB_MARKERS = [
               "legendado", "legendada", "legendados",
-              "leg.", "[leg]", "(leg)", "leg ",
+              "leg.", "[leg]", "(leg)",
               "sub ", "[sub]", "(sub)", "subtitled",
               "eng sub", "eng subs", "english", "[en]", "(en)",
               "ingles", "original", " ov", "ov)",
           ]
 
-          # ⭐ Aliases PT↔EN (cobre ~200 palavras comuns em títulos)
-          ALIASES = {
-              # franquias / nomes específicos
-              "vingadores": ["avengers"],
-              "poderoso":   ["godfather", "powerful"],
-              "chefao":     ["godfather"],
-              "senhor":     ["lord"],
-              "aneis":      ["rings"],
-              "aranha":     ["spider"],
-              "homem":      ["man"],
-              "mulher":     ["woman"],
-              "maravilha":  ["wonder"],
-              "guerra":     ["war"],
-              "estrelas":   ["stars", "wars"],
-              "galaxia":    ["galaxy"],
-              "guarda":     ["guardian"],
-              "guardoes":   ["guardians"],
-              "mundo":      ["world"],
-              "piratas":    ["pirates"],
-              "caribe":     ["caribbean"],
-              "volta":      ["back"],
-              "futuro":     ["future"],
-              "origem":     ["origin", "inception"],
-              "clube":      ["club"],
-              "luta":       ["fight"],
-              "silencio":   ["silence"],
-              "inocentes":  ["innocents", "lambs"],
-              "mortos":     ["dead"],
-              "vivo":       ["alive"],
-              "noite":      ["night"],
-              "dia":        ["day"],
-              "trevas":     ["dark", "darkness"],
-              "cavaleiro":  ["knight"],
-              "cidade":     ["city"],
-              "deus":       ["god"],
-              "rei":        ["king"],
-              "rainha":     ["queen"],
-              "principe":   ["prince"],
-              "princesa":   ["princess"],
-              "amor":       ["love"],
-              "vida":       ["life"],
-              "morte":      ["death"],
-              "tempo":      ["time"],
-              "menina":     ["girl"],
-              "menino":     ["boy"],
-              "crianca":    ["child"],
-              "casa":       ["house"],
-              "familia":    ["family"],
-              "amigo":      ["friend"],
-              "inimigo":    ["enemy"],
-              "sonho":      ["dream"],
-              "jogo":       ["game"],
-              "jogos":      ["games"],
-              "lobo":       ["wolf"],
-              "duna":       ["dune"],
-              "matrix":     ["matrix"],
-              "avatar":     ["avatar"],
-              "interestelar": ["interstellar"],
-              "django":     ["django"],
-              "golpe":      ["coup"],
-              "mentira":    ["lie"],
-              "verdade":    ["truth"],
-              "sangue":     ["blood"],
-              "fogo":       ["fire"],
-              "agua":       ["water"],
-              "terra":      ["earth"],
-              "ceu":        ["sky", "heaven"],
-              "inferno":    ["hell"],
-              "paraiso":    ["paradise"],
-              "anjo":       ["angel"],
-              "demonio":    ["demon"],
-              "fantasma":   ["ghost"],
-              "monstro":    ["monster"],
-              "heroi":      ["hero"],
-              "vila":       ["village"],
-              "vilao":      ["villain"],
-              "pai":        ["father"],
-              "mae":        ["mother"],
-              "filho":      ["son"],
-              "filha":      ["daughter"],
-              "irmao":      ["brother"],
-              "irma":       ["sister"],
-              "paz":        ["peace"],
-              "luz":        ["light"],
-              "sombra":     ["shadow"],
-              "estrada":    ["road"],
-              "caminho":    ["path", "way"],
-              "viagem":     ["journey"],
-              "aventura":   ["adventure"],
-              "destino":    ["destiny", "fate"],
-              "medo":       ["fear"],
-              "odio":       ["hate"],
-              "vinganca":   ["revenge"],
-              "justica":    ["justice"],
-              "crime":      ["crime"],
-              "policia":    ["police"],
-              "assassino":  ["killer", "assassin"],
-              "estrela":    ["star"],
-              "lua":        ["moon"],
-              "sol":        ["sun"],
-              "oceano":     ["ocean"],
-              "mar":        ["sea"],
-              "ilha":       ["island"],
-              "montanha":   ["mountain"],
-              "floresta":   ["forest"],
-              "pais":       ["country"],
-              "nacao":      ["nation"],
-              "imperio":    ["empire"],
-              "reino":      ["kingdom"],
-              "trono":      ["throne"],
-              "espada":     ["sword"],
-              "magia":      ["magic"],
-              "bruxa":      ["witch"],
-              "vampiro":    ["vampire"],
-              "zumbi":      ["zombie"],
-              "robo":       ["robot"],
-              "passado":    ["past"],
-              "presente":   ["present"],
+          # ⭐ EXPANDIDO: 200+ indicadores PT
+          PT_INDICATORS = {
+              # artigos, preposições, pronomes, conjunções
+              "o","a","os","as","um","uma","de","do","da","dos","das",
+              "ao","aos","na","nas","no","nos","em","e","ou",
+              "que","por","para","com","se","mas","nao","sua","seu",
+              "suas","seus","esta","este","isso","esse","essa","sao",
+              "foi","era","tem","vai","sobre","entre","depois","antes",
+              "agora","sempre","nunca","muito","pouco","mais","menos",
+              # gêneros cinematográficos
+              "acao","aventura","comedia","drama","terror","suspense",
+              "ficcao","cientifica","animacao","infantil","romance",
+              "documentario","musical","guerra","crime","misterio",
+              "fantasia","policial","epico","biografico",
+              # substantivos comuns em títulos
+              "origem","retorno","vinganca","destino","poder","forca",
+              "luta","jogo","jogos","cidade","familia","amigo","inimigo",
+              "senhor","aneis","rei","rainha","principe","princesa",
+              "guerreiro","guerreiros","heroi","herois","vilao","viloes",
+              "soldado","capitao","doutor","homem","mulher","menino",
+              "menina","crianca","mundo","vida","amor","morte","tempo",
+              "noite","dia","estrada","caminho","viagem","sonho",
+              "medo","odio","justica","policia","assassino","estrela",
+              "lua","sol","oceano","mar","ilha","montanha","floresta",
+              "pais","nacao","imperio","reino","trono","espada",
+              "magia","bruxa","vampiro","zumbi","robo","passado",
+              "presente","futuro","final","inicio","parte","filme",
+              "aguas","fogo","terra","ceu","inferno","paraiso",
+              "anjo","demonio","fantasma","monstro","vila","inocentes",
+              "silencio","clube","trevas","sombra","estrelas",
+              "galaxia","guarda","guardoes","piratas","caribe","volta",
+              "cavaleiro","pedra","filosofal","camara","secreta",
+              "prisioneiro","azkaban","calice","ordem","fenix",
+              "enigma","reliquias","ultimato","infinita","era","ultron",
+              "aranha","formiga","vespa","pantera","negra","marvel",
+              "estranho","guardioes","thor","hulk","viuva","eterno",
+              "eternos","shang","chi","lenda","torres","sociedade",
+              "duas","vingadores","duna","matrix","avatar","interestelar",
+              "django","golpe","mentira","verdade","capita",
+          }
+
+          # ⭐ NOVO: palavras inglesas comuns (para rejeitar títulos EN)
+          EN_COMMON = {
+              "the","of","and","to","in","is","it","you","that","he",
+              "was","for","on","are","with","as","his","they","at","be",
+              "this","have","from","or","one","had","by","but","not",
+              "what","all","were","we","when","your","can","said","there",
+              "use","an","each","which","she","do","how","their","if",
+              "will","up","other","about","out","many","then","them",
+              "these","so","some","her","would","make","like","him","into",
+              "time","has","look","two","more","write","go","see","number",
+              "no","way","could","people","my","than","first","water","been",
+              "call","who","oil","its","now","find","long","down","day",
+              "did","get","come","made","may","part","back","after","only",
+              "old","new","over","also","just","know","take","night",
+              "love","life","war","world","man","woman","boy","girl",
           }
 
           BLACKLIST = [
@@ -231,7 +165,7 @@ jobs:
               "documentário", "documentario", "documental", "vinheta",
               "globoplay", "globo video", "review", "reaction", "making of",
               "behind the scenes", "top 10", "top 5 ", "resumo", "resenha",
-              "opinião", "opiniao", "meditantes",
+              "opinião", "opiniao", "meditantes", "meditação",
           ]
 
           STOPWORDS = {
@@ -242,16 +176,54 @@ jobs:
           }
 
           NUMEROS = {
-              "1":  ["um", "one", "primeiro", "first"],
-              "2":  ["dois", "duas", "two", "segundo", "second"],
-              "3":  ["tres", "three", "terceiro", "third"],
-              "4":  ["quatro", "four", "quarto", "fourth"],
-              "5":  ["cinco", "five", "quinto", "fifth"],
-              "6":  ["seis", "six", "sexto", "sixth"],
-              "7":  ["sete", "seven", "setimo", "seventh"],
-              "8":  ["oito", "eight", "oitavo", "eighth"],
-              "9":  ["nove", "nine", "nono", "ninth"],
-              "10": ["dez", "ten", "decimo", "tenth"],
+              "1": ["um","one","primeiro","first"],
+              "2": ["dois","duas","two","segundo","second"],
+              "3": ["tres","three","terceiro","third"],
+              "4": ["quatro","four","quarto","fourth"],
+              "5": ["cinco","five","quinto","fifth"],
+              "6": ["seis","six","sexto","sixth"],
+              "7": ["sete","seven","setimo","seventh"],
+              "8": ["oito","eight","oitavo","eighth"],
+              "9": ["nove","nine","nono","ninth"],
+              "10": ["dez","ten","decimo","tenth"],
+          }
+
+          ALIASES = {
+              "vingadores":["avengers"],"poderoso":["godfather"],
+              "chefao":["godfather"],"senhor":["lord"],"aneis":["rings"],
+              "aranha":["spider"],"homem":["man"],"mulher":["woman"],
+              "maravilha":["wonder"],"guerra":["war"],"estrelas":["stars","wars"],
+              "galaxia":["galaxy"],"guarda":["guardian"],"guardoes":["guardians"],
+              "mundo":["world"],"piratas":["pirates"],"caribe":["caribbean"],
+              "volta":["back"],"futuro":["future"],"origem":["origin","inception"],
+              "clube":["club"],"luta":["fight"],"silencio":["silence"],
+              "inocentes":["innocents","lambs"],"mortos":["dead"],
+              "noite":["night"],"dia":["day"],"trevas":["dark","darkness"],
+              "cavaleiro":["knight"],"cidade":["city"],"deus":["god"],
+              "rei":["king"],"rainha":["queen"],"amor":["love"],
+              "vida":["life"],"morte":["death"],"tempo":["time"],
+              "mundo":["world"],"casa":["house"],"familia":["family"],
+              "amigo":["friend"],"inimigo":["enemy"],"sonho":["dream"],
+              "jogo":["game"],"lobo":["wolf"],"duna":["dune"],
+              "interestelar":["interstellar"],"sangue":["blood"],
+              "fogo":["fire"],"agua":["water"],"terra":["earth"],
+              "ceu":["sky","heaven"],"inferno":["hell"],
+              "fantasma":["ghost"],"monstro":["monster"],"heroi":["hero"],
+              "pai":["father"],"mae":["mother"],"filho":["son"],
+              "filha":["daughter"],"irmao":["brother"],"irma":["sister"],
+              "paz":["peace"],"luz":["light"],"sombra":["shadow"],
+              "estrada":["road"],"caminho":["path","way"],
+              "viagem":["journey"],"aventura":["adventure"],
+              "destino":["destiny","fate"],"medo":["fear"],"odio":["hate"],
+              "vinganca":["revenge"],"justica":["justice"],"crime":["crime"],
+              "policia":["police"],"assassino":["killer","assassin"],
+              "estrela":["star"],"lua":["moon"],"sol":["sun"],
+              "oceano":["ocean"],"mar":["sea"],"ilha":["island"],
+              "montanha":["mountain"],"floresta":["forest"],
+              "pais":["country"],"nacao":["nation"],"imperio":["empire"],
+              "reino":["kingdom"],"trono":["throne"],"espada":["sword"],
+              "magia":["magic"],"bruxa":["witch"],"vampiro":["vampire"],
+              "zumbi":["zombie"],"robo":["robot"],
           }
 
           def normalizar(t):
@@ -263,70 +235,60 @@ jobs:
 
           def palavras_significativas(texto):
               n = re.sub(r"[^\w\s]", " ", normalizar(texto))
-              result = []
-              for w in n.split():
-                  if w in STOPWORDS:
-                      continue
-                  if eh_ano(w):
-                      continue
-                  if len(w) >= 4 or w.isdigit():
-                      result.append(w)
-              return result
+              return [w for w in n.split()
+                      if w not in STOPWORDS and not eh_ano(w)
+                      and (len(w) >= 4 or w.isdigit())]
 
-          # ⭐ NOVO: classifica áudio do título
+          # ⭐ MELHORADO: classificação de áudio com 200+ indicadores PT
           def classificar_audio(titulo):
               tn = normalizar(titulo)
-              if any(p in tn for p in PT_BR_MARKERS):
-                  return "pt"
+              # 1. marcadores EN primeiro (mais fortes)
               if any(p in tn for p in EN_SUB_MARKERS):
                   return "en"
-              pt_common = {"nao", "uma", "com", "para", "de", "do", "da", "dos",
-                           "das", "ao", "na", "no", "que", "por", "em"}
+              # 2. marcadores PT explícitos
+              if any(p in tn for p in PT_BR_MARKERS):
+                  return "pt"
+              # 3. acentos PT no título original
+              titulo_lower = titulo.lower()
+              if any(c in titulo_lower for c in "áàâãéêíóôõúüçñ"):
+                  return "pt"
+              # 4. palavras PT indicadoras
               words = set(re.findall(r"\w+", tn))
-              if words & pt_common:
+              if words & PT_INDICATORS:
+                  return "pt"
+              # 5. ≥2 palavras EN comuns → inglês
+              if len(words & EN_COMMON) >= 2:
+                  return "en"
+              # 6. nome próprio curto → provável PT-BR
+              if len(words) <= 2:
                   return "pt?"
+              # 7. desconhecido
               return "?"
 
-          # ⭐ NOVO: filtro de áudio (configurável)
           def eh_ptbr(titulo):
               audio = classificar_audio(titulo)
               if audio == "pt":
-                  return True, "dublado"
+                  return True, "PT-BR"
               if audio == "en":
-                  return False, "legendado/inglês"
+                  return False, "inglês/legendado"
               if audio == "pt?":
-                  return True, "título em PT-BR"
+                  return True, "nome próprio"
               if audio == "?":
-                  # nomes próprios (Batman, Matrix, Duna) — aceita só se não-estrito
                   if ESTRITO_PTBR:
-                      # mas se for <= 3 palavras, aceitar (nome próprio)
-                      words = re.findall(r"\w+", normalizar(titulo))
-                      if len(words) <= 3:
-                          return True, "nome próprio"
-                      return False, "sem marcador PT-BR"
+                      return False, "sem marcador PT"
                   return True, "sem marcador (assumido PT)"
               return True, ""
 
           def palavra_bate(word, text_words):
-              # 1) match exato
-              if word in text_words:
-                  return True
-              # 2) dígito → palavra numérica
+              if word in text_words: return True
               if word.isdigit() and word in NUMEROS:
-                  if any(n in text_words for n in NUMEROS[word]):
-                      return True
-              # 3) palavra numérica → dígito
+                  if any(n in text_words for n in NUMEROS[word]): return True
               for num, syns in NUMEROS.items():
-                  if word in syns and num in text_words:
-                      return True
-              # 4) alias PT↔EN
+                  if word in syns and num in text_words: return True
               if word in ALIASES:
-                  if any(alias in text_words for alias in ALIASES[word]):
-                      return True
-              for en_word, pt_aliases in ALIASES.items():
-                  if word in pt_aliases and en_word in text_words:
-                      return True
-              # 5) prefix match p/ traduções (parasita ↔ parasite)
+                  if any(a in text_words for a in ALIASES[word]): return True
+              for en_w, pt_aliases in ALIASES.items():
+                  if word in pt_aliases and en_w in text_words: return True
               if len(word) >= 5:
                   for tw in text_words:
                       if len(tw) >= 4 and (tw.startswith(word[:5]) or word.startswith(tw[:5])):
@@ -338,8 +300,7 @@ jobs:
               if not q:
                   n = re.sub(r"[^\w\s]", " ", normalizar(query))
                   q = [w for w in n.split() if w.isdigit()]
-                  if not q:
-                      return True
+                  if not q: return True
               tn = normalizar(titulo)
               text_words = set(re.findall(r"\w+", tn))
               return all(palavra_bate(w, text_words) for w in q)
@@ -422,8 +383,7 @@ jobs:
                   try:
                       with open(ARQ_ESTADO,"r",encoding="utf-8") as f:
                           return json.load(f)
-                  except Exception:
-                      pass
+                  except Exception: pass
               return {"pendentes": [], "processados": [], "execucoes": 0, "ultima_execucao": None}
 
           def salvar_estado(estado):
@@ -466,33 +426,41 @@ jobs:
               m = re.search(r'"duration"\s*:\s*"?(PT[\dHMS]+)"?', html)
               return iso8601_para_segundos(m.group(1)) if m else 0
 
+          # ⭐ NOVO: retry no Tankie (resolvia timeout do Duna Parte Dois)
           def buscar_tankietube(query, outdir, encontrados):
               n = 0
-              try:
-                  r = requests.get("https://tankie.tube/api/v1/search/videos",
-                                   params={"search":query,"count":10}, timeout=20)
-                  r.raise_for_status()
-                  for v in r.json().get("data",[]):
-                      name, dur = v.get("name",""), v.get("duration",0) or 0
-                      if dur < MIN_DURACAO:
-                          continue
-                      if not passa_blacklist(name):
-                          print(f"      [blacklist] {name}"); continue
-                      if not eh_relevante(query, name):
-                          print(f"      [irrelevante] {name}"); continue
-                      # ⭐ FILTRO DE ÁUDIO
-                      pt_ok, motivo = eh_ptbr(name)
-                      if not pt_ok:
-                          print(f"      [{motivo}] {name}"); continue
-                      link = v.get("url") or ("https://tankie.tube/w/"+v.get("shortUUID",""))
-                      tp = v.get("thumbnailPath") or v.get("previewPath") or ""
-                      thumb = "https://tankie.tube" + tp if tp else ""
-                      if name and link:
-                          gerar_html(name, thumb, link, outdir)
-                          encontrados.add(name); n += 1
-                          print(f"      [OK] {name} ({formatar_duracao(dur)}) [{motivo}]")
-              except Exception as e:
-                  print(f"      [ERRO Tankie] {e}")
+              for tentativa in range(3):
+                  try:
+                      r = requests.get("https://tankie.tube/api/v1/search/videos",
+                                       params={"search":query,"count":10}, timeout=30)
+                      r.raise_for_status()
+                      for v in r.json().get("data",[]):
+                          name, dur = v.get("name",""), v.get("duration",0) or 0
+                          if dur < MIN_DURACAO: continue
+                          if not passa_blacklist(name):
+                              print(f"      [blacklist] {name}"); continue
+                          if not eh_relevante(query, name):
+                              print(f"      [irrelevante] {name}"); continue
+                          pt_ok, motivo = eh_ptbr(name)
+                          if not pt_ok:
+                              print(f"      [áudio: {motivo}] {name}"); continue
+                          link = v.get("url") or ("https://tankie.tube/w/"+v.get("shortUUID",""))
+                          tp = v.get("thumbnailPath") or v.get("previewPath") or ""
+                          thumb = "https://tankie.tube" + tp if tp else ""
+                          if name and link:
+                              gerar_html(name, thumb, link, outdir)
+                              encontrados.add(name); n += 1
+                              print(f"      [OK] {name} ({formatar_duracao(dur)}) [{motivo}]")
+                      return n
+                  except requests.exceptions.Timeout:
+                      if tentativa < 2:
+                          print(f"      [timeout Tankie] tentando novamente ({tentativa+2}/3)...")
+                          time.sleep(3)
+                      else:
+                          print(f"      [ERRO Tankie] timeout após 3 tentativas")
+                  except Exception as e:
+                      print(f"      [ERRO Tankie] {e}")
+                      break
               return n
 
           def buscar_tokyvideo(query, outdir, encontrados):
@@ -564,10 +532,9 @@ jobs:
                       if not eh_relevante(query, titulo):
                           print(f"      [{i}/{len(links)}] [irrelevante] {titulo}")
                           stats["irrelevante"] += 1; continue
-                      # ⭐ FILTRO DE ÁUDIO
                       pt_ok, motivo = eh_ptbr(titulo)
                       if not pt_ok:
-                          print(f"      [{i}/{len(links)}] [{motivo}] {titulo}")
+                          print(f"      [{i}/{len(links)}] [áudio: {motivo}] {titulo}")
                           stats["audio"] += 1; continue
 
                       thumb = ""
@@ -624,15 +591,13 @@ jobs:
               total_proc  = len(estado["processados"])
 
               if not estado["pendentes"]:
-                  print("\n✅ Fila vazia — nada a processar.")
-                  print(f"   Total processados: {total_proc}/{total_geral}")
+                  print("\n✅ Fila vazia.")
                   salvar_estado(estado)
                   with open("/tmp/faltam.txt","w") as f: f.write("0")
                   return
 
               lote = estado["pendentes"][:LOTE]
-              print(f"\n══════ Fila: {total_proc}/{total_geral} processados — "
-                    f"processando {len(lote)} agora (lote de {LOTE}) ══════\n")
+              print(f"\n══════ Fila: {total_proc}/{total_geral} — processando {len(lote)} (lote de {LOTE}) ══════\n")
 
               encontrados = carregar_titulos()
               gerados_agora = 0
@@ -663,21 +628,16 @@ jobs:
               restantes  = len(estado["pendentes"])
 
               print("\n══════════ RESUMO ══════════")
-              print(f"Processados nesta execução : {processados_agora}")
-              print(f"Total processados até agora: {total_proc}/{total_geral}")
-              print(f"Restantes na fila          : {restantes}")
-              print(f"HTMLs gerados agora        : {gerados_agora}")
-              print(f"Títulos totais (>40min)    : {len(encontrados)}")
+              print(f"Processados agora: {processados_agora} | Total: {total_proc}/{total_geral} | Restantes: {restantes}")
+              print(f"HTMLs gerados: {gerados_agora} | Títulos totais: {len(encontrados)}")
               if restantes > 0:
-                  prox = estado['pendentes'][:3]
-                  print(f"Próximo lote começará por   : {', '.join(prox)}{'...' if restantes>3 else ''}")
+                  print(f"Próximo lote: {', '.join(estado['pendentes'][:3])}{'...' if restantes>3 else ''}")
               else:
                   print("🎉 Fila concluída!")
               print("════════════════════════════")
 
               salvar_estado(estado)
-              with open("/tmp/faltam.txt","w") as f:
-                  f.write(str(restantes))
+              with open("/tmp/faltam.txt","w") as f: f.write(str(restantes))
 
           if __name__ == "__main__":
               main()
@@ -688,40 +648,32 @@ jobs:
           FILMES_INPUT: ${{ github.event.inputs.filmes }}
           LOTE: ${{ inputs.lote || 200 }}
           RESETAR: ${{ inputs.resetar || 'false' }}
-          ESTRITO_PTBR: ${{ inputs.estrito_ptbr || 'true' }}
+          ESTRITO_PTBR: ${{ inputs.estrito_ptbr || 'false' }}
           PYTHONUNBUFFERED: "1"
         run: python -u busca.py
 
-      - name: Commit e push (com retry e rebase)
+      - name: Commit e push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config pull.rebase true
-
           mkdir -p output
           touch titulos_encontrados.txt fila_estado.json
           git add output/ titulos_encontrados.txt fila_estado.json
-
           if git diff --cached --quiet; then
-            echo "Nenhuma alteração para commitar."
-            exit 0
+            echo "Nenhuma alteração."; exit 0
           fi
-
-          git commit -m "chore: fila de filmes — lote processado [skip ci] run=${{ github.run_id }}"
-
+          git commit -m "chore: fila processada [skip ci] run=${{ github.run_id }}"
           for i in 1 2 3 4 5; do
-            echo "→ Tentativa $i de push..."
+            echo "→ Push tentativa $i..."
             if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
-              echo "✅ Push OK na tentativa $i."
-              exit 0
+              echo "✅ Push OK."; exit 0
             fi
-            echo "⚠️  Falhou, aguardando $((i*5))s..."
             sleep $((i*5))
           done
-          echo "❌ Push falhou após 5 tentativas."
           exit 1
 
-      - name: Disparar próxima run (se fila não vazia)
+      - name: Disparar próxima run
         if: |
           success() && (
             github.event_name == 'schedule' ||
@@ -734,33 +686,18 @@ jobs:
           LOTE_IN: ${{ inputs.lote || '200' }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "⚠️  PAT_CHAIN não configurado: sem auto-chain."
-            exit 0
+            echo "⚠️  PAT_CHAIN não configurado."; exit 0
           fi
-
           FALTAM=$(cat /tmp/faltam.txt 2>/dev/null || echo 0)
-          echo "📊 Faltam na fila: $FALTAM"
-          if [ "${FALTAM:-0}" -le 0 ]; then
-            echo "✅ Fila concluída — não vou disparar mais nada."
-            exit 0
-          fi
-
+          echo "📊 Faltam: $FALTAM"
+          if [ "${FALTAM:-0}" -le 0 ]; then exit 0; fi
           LIMITE_ISO=$(date -u -d '60 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
           RECENTES=$(gh run list --workflow="busca_filmes.yml" --event workflow_dispatch --limit 100 \
             --json createdAt --jq "[.[] | select(.createdAt > \"$LIMITE_ISO\")] | length" \
             --repo "$REPO" 2>/dev/null || echo 0)
-          echo "🔁 Encadeamentos na última hora: $RECENTES"
-          if [ "${RECENTES:-0}" -ge 60 ]; then
-            echo "🛑 Limite de 60 runs/hora atingido — parando auto-chain."
-            exit 0
-          fi
-
-          echo "🚀 Disparando próxima run (lote=$LOTE_IN)..."
+          echo "🔁 Runs na última hora: $RECENTES"
+          if [ "${RECENTES:-0}" -ge 60 ]; then exit 0; fi
           sleep 30
           gh workflow run "busca_filmes.yml" --repo "$REPO" --ref "${GITHUB_REF_NAME}" \
-            -f auto_run=true \
-            -f lote="${LOTE_IN}" \
-            -f resetar=false \
-            -f filmes="" \
-            -f estrito_ptbr=true
+            -f auto_run=true -f lote="${LOTE_IN}" -f resetar=false -f filmes="" -f estrito_ptbr=false
           echo "✅ Próxima run disparada."
