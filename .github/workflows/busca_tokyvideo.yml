@@ -47,17 +47,19 @@ jobs:
           except Exception:
               pass
 
+          # ⭐ CORREÇÃO DO LOOP INFINITO AQUI
+          _orig_print = print
           def print(*args, **kwargs):
               kwargs.setdefault("flush", True)
               ts = datetime.now().strftime("%H:%M:%S")
-              print(f"[{ts}]", *args, **kwargs)
+              _orig_print(f"[{ts}]", *args, **kwargs)
 
           LIMITE = int(os.environ.get("LIMITE", "50"))
           MIN_DURACAO = 40 * 60
           ARQ_ESTADO = "tokyvideo_estado.json"
           ARQ_TITULOS = "titulos_encontrados.txt"
 
-          # ⭐ CATEGORIAS EXTRAÍDAS DA SUA PRINT
+          # Categorias de filmes
           CATALOGOS = [
               "https://www.tokyvideo.com/br/séries/filmes-diversos",
               "https://www.tokyvideo.com/br/séries/netcine-filmes-e-series-online-gratis",
@@ -171,7 +173,8 @@ jobs:
 
                   # 2. Processar cada link
                   novos_html = 0
-                  links_para_processar = list(links_coletados)[:LIMITE * 3] # Pega um pouco a mais pois muitos vão ser < 40 min
+                  # Pega 3x o limite para ter margem de segurança (muitos links serão rejeitados por duração)
+                  links_para_processar = list(links_coletados)[:LIMITE * 3] 
 
                   for i, href in enumerate(links_para_processar, 1):
                       if novos_html >= LIMITE:
