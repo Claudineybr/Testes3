@@ -1,4 +1,4 @@
-name: Buscar Filmes (Tokyvideo & TankieTube) — fila + auto-chain
+name: Buscar Filmes (Tokyvideo & TankieTube) — fila + auto-chain + PT-BR
 
 on:
   workflow_dispatch:
@@ -20,6 +20,10 @@ on:
         description: 'Disparar próxima run automaticamente se sobrar fila'
         type: boolean
         default: false
+      estrito_ptbr:
+        description: 'Rejeitar títulos sem marcador PT-BR (mais rigoroso)'
+        type: boolean
+        default: true
   schedule:
     - cron: '0 */6 * * *'
 
@@ -75,18 +79,159 @@ jobs:
           INICIO         = time.time()
           LIMITE_SEG     = 5 * 3600
 
-          # ⭐ CORRIGIDO: máximo 500 (era 50)
-          LOTE    = max(1, min(500, int(os.environ.get("LOTE", "200") or "200")))
-          RESETAR = os.environ.get("RESETAR", "").lower() == "true"
+          LOTE          = max(1, min(500, int(os.environ.get("LOTE", "200") or "200")))
+          RESETAR       = os.environ.get("RESETAR", "").lower() == "true"
+          ESTRITO_PTBR  = os.environ.get("ESTRITO_PTBR", "true").lower() == "true"
+
+          # ⭐ Marcadores fortes de áudio PT-BR
+          PT_BR_MARKERS = [
+              "dublado", "dublagem", "dublada", "dublados",
+              "pt-br", "ptbr", "pt br", "pt/br",
+              "portugues", "portugues-br", "[pt]",
+              "br-dub", "dual audio", "dual audio",
+          ]
+
+          # ⭐ Marcadores de áudio EN/legendado
+          EN_SUB_MARKERS = [
+              "legendado", "legendada", "legendados",
+              "leg.", "[leg]", "(leg)", "leg ",
+              "sub ", "[sub]", "(sub)", "subtitled",
+              "eng sub", "eng subs", "english", "[en]", "(en)",
+              "ingles", "original", " ov", "ov)",
+          ]
+
+          # ⭐ Aliases PT↔EN (cobre ~200 palavras comuns em títulos)
+          ALIASES = {
+              # franquias / nomes específicos
+              "vingadores": ["avengers"],
+              "poderoso":   ["godfather", "powerful"],
+              "chefao":     ["godfather"],
+              "senhor":     ["lord"],
+              "aneis":      ["rings"],
+              "aranha":     ["spider"],
+              "homem":      ["man"],
+              "mulher":     ["woman"],
+              "maravilha":  ["wonder"],
+              "guerra":     ["war"],
+              "estrelas":   ["stars", "wars"],
+              "galaxia":    ["galaxy"],
+              "guarda":     ["guardian"],
+              "guardoes":   ["guardians"],
+              "mundo":      ["world"],
+              "piratas":    ["pirates"],
+              "caribe":     ["caribbean"],
+              "volta":      ["back"],
+              "futuro":     ["future"],
+              "origem":     ["origin", "inception"],
+              "clube":      ["club"],
+              "luta":       ["fight"],
+              "silencio":   ["silence"],
+              "inocentes":  ["innocents", "lambs"],
+              "mortos":     ["dead"],
+              "vivo":       ["alive"],
+              "noite":      ["night"],
+              "dia":        ["day"],
+              "trevas":     ["dark", "darkness"],
+              "cavaleiro":  ["knight"],
+              "cidade":     ["city"],
+              "deus":       ["god"],
+              "rei":        ["king"],
+              "rainha":     ["queen"],
+              "principe":   ["prince"],
+              "princesa":   ["princess"],
+              "amor":       ["love"],
+              "vida":       ["life"],
+              "morte":      ["death"],
+              "tempo":      ["time"],
+              "menina":     ["girl"],
+              "menino":     ["boy"],
+              "crianca":    ["child"],
+              "casa":       ["house"],
+              "familia":    ["family"],
+              "amigo":      ["friend"],
+              "inimigo":    ["enemy"],
+              "sonho":      ["dream"],
+              "jogo":       ["game"],
+              "jogos":      ["games"],
+              "lobo":       ["wolf"],
+              "duna":       ["dune"],
+              "matrix":     ["matrix"],
+              "avatar":     ["avatar"],
+              "interestelar": ["interstellar"],
+              "django":     ["django"],
+              "golpe":      ["coup"],
+              "mentira":    ["lie"],
+              "verdade":    ["truth"],
+              "sangue":     ["blood"],
+              "fogo":       ["fire"],
+              "agua":       ["water"],
+              "terra":      ["earth"],
+              "ceu":        ["sky", "heaven"],
+              "inferno":    ["hell"],
+              "paraiso":    ["paradise"],
+              "anjo":       ["angel"],
+              "demonio":    ["demon"],
+              "fantasma":   ["ghost"],
+              "monstro":    ["monster"],
+              "heroi":      ["hero"],
+              "vila":       ["village"],
+              "vilao":      ["villain"],
+              "pai":        ["father"],
+              "mae":        ["mother"],
+              "filho":      ["son"],
+              "filha":      ["daughter"],
+              "irmao":      ["brother"],
+              "irma":       ["sister"],
+              "paz":        ["peace"],
+              "luz":        ["light"],
+              "sombra":     ["shadow"],
+              "estrada":    ["road"],
+              "caminho":    ["path", "way"],
+              "viagem":     ["journey"],
+              "aventura":   ["adventure"],
+              "destino":    ["destiny", "fate"],
+              "medo":       ["fear"],
+              "odio":       ["hate"],
+              "vinganca":   ["revenge"],
+              "justica":    ["justice"],
+              "crime":      ["crime"],
+              "policia":    ["police"],
+              "assassino":  ["killer", "assassin"],
+              "estrela":    ["star"],
+              "lua":        ["moon"],
+              "sol":        ["sun"],
+              "oceano":     ["ocean"],
+              "mar":        ["sea"],
+              "ilha":       ["island"],
+              "montanha":   ["mountain"],
+              "floresta":   ["forest"],
+              "pais":       ["country"],
+              "nacao":      ["nation"],
+              "imperio":    ["empire"],
+              "reino":      ["kingdom"],
+              "trono":      ["throne"],
+              "espada":     ["sword"],
+              "magia":      ["magic"],
+              "bruxa":      ["witch"],
+              "vampiro":    ["vampire"],
+              "zumbi":      ["zombie"],
+              "robo":       ["robot"],
+              "passado":    ["past"],
+              "presente":   ["present"],
+          }
 
           BLACKLIST = [
               "aula ", "playlist", "gameplay", "walkthrough", "tutorial",
               "unboxing", "podcast", "entrevista", "interview", "trailer",
-              "teaser", "audiobook", "audiolivro", "concerto", "show completo",
-              "ao vivo em", "cd completo", "dvd completo", "compilação",
-              "compilation", "episódio", "episode ", "temporada ", "season ",
-              "matchday", "top 5 gol", "top 10 gol", "gols |", "| gols",
+              "teaser", "audiobook", "audiolivro", "audio livro", "concerto",
+              "show completo", "ao vivo em", "cd completo", "dvd completo",
+              "compilação", "compilation", "episódio", "episode ", "temporada ",
+              "season ", "matchday", "top 5 gol", "top 10 gol", "gols |", "| gols",
               "hurricane", "notícias ao vivo", "live: ", "let's play", "lets play",
+              "documentário", "documentario", "documental", "vinheta",
+              "globoplay", "globo video", "review", "reaction", "making of",
+              "behind the scenes", "top 10", "top 5 ", "resumo", "resenha",
+              "opinião", "opiniao", "meditantes",
           ]
 
           STOPWORDS = {
@@ -96,24 +241,108 @@ jobs:
               "parte","part","vol","volume",
           }
 
+          NUMEROS = {
+              "1":  ["um", "one", "primeiro", "first"],
+              "2":  ["dois", "duas", "two", "segundo", "second"],
+              "3":  ["tres", "three", "terceiro", "third"],
+              "4":  ["quatro", "four", "quarto", "fourth"],
+              "5":  ["cinco", "five", "quinto", "fifth"],
+              "6":  ["seis", "six", "sexto", "sixth"],
+              "7":  ["sete", "seven", "setimo", "seventh"],
+              "8":  ["oito", "eight", "oitavo", "eighth"],
+              "9":  ["nove", "nine", "nono", "ninth"],
+              "10": ["dez", "ten", "decimo", "tenth"],
+          }
+
           def normalizar(t):
               t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
               return t.lower()
 
+          def eh_ano(w):
+              return w.isdigit() and len(w) == 4 and 1900 <= int(w) <= 2099
+
           def palavras_significativas(texto):
               n = re.sub(r"[^\w\s]", " ", normalizar(texto))
-              return [
-                  w for w in n.split()
-                  if len(w) >= 4 and w not in STOPWORDS and not w.isdigit()
-              ]
+              result = []
+              for w in n.split():
+                  if w in STOPWORDS:
+                      continue
+                  if eh_ano(w):
+                      continue
+                  if len(w) >= 4 or w.isdigit():
+                      result.append(w)
+              return result
+
+          # ⭐ NOVO: classifica áudio do título
+          def classificar_audio(titulo):
+              tn = normalizar(titulo)
+              if any(p in tn for p in PT_BR_MARKERS):
+                  return "pt"
+              if any(p in tn for p in EN_SUB_MARKERS):
+                  return "en"
+              pt_common = {"nao", "uma", "com", "para", "de", "do", "da", "dos",
+                           "das", "ao", "na", "no", "que", "por", "em"}
+              words = set(re.findall(r"\w+", tn))
+              if words & pt_common:
+                  return "pt?"
+              return "?"
+
+          # ⭐ NOVO: filtro de áudio (configurável)
+          def eh_ptbr(titulo):
+              audio = classificar_audio(titulo)
+              if audio == "pt":
+                  return True, "dublado"
+              if audio == "en":
+                  return False, "legendado/inglês"
+              if audio == "pt?":
+                  return True, "título em PT-BR"
+              if audio == "?":
+                  # nomes próprios (Batman, Matrix, Duna) — aceita só se não-estrito
+                  if ESTRITO_PTBR:
+                      # mas se for <= 3 palavras, aceitar (nome próprio)
+                      words = re.findall(r"\w+", normalizar(titulo))
+                      if len(words) <= 3:
+                          return True, "nome próprio"
+                      return False, "sem marcador PT-BR"
+                  return True, "sem marcador (assumido PT)"
+              return True, ""
+
+          def palavra_bate(word, text_words):
+              # 1) match exato
+              if word in text_words:
+                  return True
+              # 2) dígito → palavra numérica
+              if word.isdigit() and word in NUMEROS:
+                  if any(n in text_words for n in NUMEROS[word]):
+                      return True
+              # 3) palavra numérica → dígito
+              for num, syns in NUMEROS.items():
+                  if word in syns and num in text_words:
+                      return True
+              # 4) alias PT↔EN
+              if word in ALIASES:
+                  if any(alias in text_words for alias in ALIASES[word]):
+                      return True
+              for en_word, pt_aliases in ALIASES.items():
+                  if word in pt_aliases and en_word in text_words:
+                      return True
+              # 5) prefix match p/ traduções (parasita ↔ parasite)
+              if len(word) >= 5:
+                  for tw in text_words:
+                      if len(tw) >= 4 and (tw.startswith(word[:5]) or word.startswith(tw[:5])):
+                          return True
+              return False
 
           def eh_relevante(query, titulo):
               q = palavras_significativas(query)
-              if not q: return True
+              if not q:
+                  n = re.sub(r"[^\w\s]", " ", normalizar(query))
+                  q = [w for w in n.split() if w.isdigit()]
+                  if not q:
+                      return True
               tn = normalizar(titulo)
-              hits = sum(1 for w in q if w in tn)
-              if len(q) <= 2: return hits >= 1
-              return hits / len(q) >= 0.6
+              text_words = set(re.findall(r"\w+", tn))
+              return all(palavra_bate(w, text_words) for w in q)
 
           def passa_blacklist(titulo):
               tn = normalizar(titulo)
@@ -245,18 +474,23 @@ jobs:
                   r.raise_for_status()
                   for v in r.json().get("data",[]):
                       name, dur = v.get("name",""), v.get("duration",0) or 0
-                      if dur < MIN_DURACAO: continue
+                      if dur < MIN_DURACAO:
+                          continue
                       if not passa_blacklist(name):
                           print(f"      [blacklist] {name}"); continue
                       if not eh_relevante(query, name):
                           print(f"      [irrelevante] {name}"); continue
+                      # ⭐ FILTRO DE ÁUDIO
+                      pt_ok, motivo = eh_ptbr(name)
+                      if not pt_ok:
+                          print(f"      [{motivo}] {name}"); continue
                       link = v.get("url") or ("https://tankie.tube/w/"+v.get("shortUUID",""))
                       tp = v.get("thumbnailPath") or v.get("previewPath") or ""
                       thumb = "https://tankie.tube" + tp if tp else ""
                       if name and link:
                           gerar_html(name, thumb, link, outdir)
                           encontrados.add(name); n += 1
-                          print(f"      [OK] {name} ({formatar_duracao(dur)})")
+                          print(f"      [OK] {name} ({formatar_duracao(dur)}) [{motivo}]")
               except Exception as e:
                   print(f"      [ERRO Tankie] {e}")
               return n
@@ -282,7 +516,7 @@ jobs:
                       vistos.add(href); links.append((a, href))
                   print(f"      Tokyvideo: {len(links)} link(s) na busca")
 
-                  stats = {"dur?": 0, "<40min": 0, "blacklist": 0, "irrelevante": 0, "OK": 0}
+                  stats = {"dur?": 0, "<40min": 0, "blacklist": 0, "irrelevante": 0, "audio": 0, "OK": 0}
 
                   for i, (a, href) in enumerate(links, 1):
                       if tempo_esgotado():
@@ -330,6 +564,11 @@ jobs:
                       if not eh_relevante(query, titulo):
                           print(f"      [{i}/{len(links)}] [irrelevante] {titulo}")
                           stats["irrelevante"] += 1; continue
+                      # ⭐ FILTRO DE ÁUDIO
+                      pt_ok, motivo = eh_ptbr(titulo)
+                      if not pt_ok:
+                          print(f"      [{i}/{len(links)}] [{motivo}] {titulo}")
+                          stats["audio"] += 1; continue
 
                       thumb = ""
                       img = a.find("img")
@@ -342,10 +581,11 @@ jobs:
                           if og: thumb = og.get("content","")
                       gerar_html(titulo, thumb, href, outdir)
                       encontrados.add(titulo); n += 1; stats["OK"] += 1
-                      print(f"      [{i}/{len(links)}] [OK] {titulo} ({formatar_duracao(dur)})")
+                      print(f"      [{i}/{len(links)}] [OK] {titulo} ({formatar_duracao(dur)}) [{motivo}]")
 
                   print(f"      → Toky stats: OK={stats['OK']} <40min={stats['<40min']} "
-                        f"dur?={stats['dur?']} blacklist={stats['blacklist']} irrelevante={stats['irrelevante']}")
+                        f"dur?={stats['dur?']} blacklist={stats['blacklist']} "
+                        f"irrelevante={stats['irrelevante']} audio={stats['audio']}")
               except Exception as e:
                   print(f"      [ERRO Toky] {e}")
               return n
@@ -377,6 +617,8 @@ jobs:
               novos = sincronizar(estado, filmes_txt)
               if novos:
                   print(f"➕ {len(novos)} novo(s) filme(s) adicionado(s) à fila")
+
+              print(f"🎙️  Modo PT-BR: {'ESTRITO' if ESTRITO_PTBR else 'PERMISSIVO'}")
 
               total_geral = len(estado["processados"]) + len(estado["pendentes"])
               total_proc  = len(estado["processados"])
@@ -446,6 +688,7 @@ jobs:
           FILMES_INPUT: ${{ github.event.inputs.filmes }}
           LOTE: ${{ inputs.lote || 200 }}
           RESETAR: ${{ inputs.resetar || 'false' }}
+          ESTRITO_PTBR: ${{ inputs.estrito_ptbr || 'true' }}
           PYTHONUNBUFFERED: "1"
         run: python -u busca.py
 
@@ -518,5 +761,6 @@ jobs:
             -f auto_run=true \
             -f lote="${LOTE_IN}" \
             -f resetar=false \
-            -f filmes=""
+            -f filmes="" \
+            -f estrito_ptbr=true
           echo "✅ Próxima run disparada."
