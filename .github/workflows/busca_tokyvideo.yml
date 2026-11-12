@@ -1,0 +1,270 @@
+name: Buscar Filmes — Tokyvideo Categorias (Playwright)
+
+on:
+  workflow_dispatch:
+    inputs:
+      limite:
+        description: 'Quantos filmes processar NESTA execução (1-100)'
+        type: number
+        default: 50
+        required: false
+  schedule:
+    - cron: '0 6 * * 1'   # toda segunda às 6h UTC
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  buscar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependências
+        run: |
+          pip install playwright beautifulsoup4
+          playwright install chromium
+
+      - name: Criar script
+        run: |
+          cat << 'PYEOF' > tokyvideo.py
+          import os, re, json, time, sys, unicodedata
+          from datetime import datetime
+          from playwright.sync_api import sync_playwright
+          from bs4 import BeautifulSoup
+          from html import escape as html_escape
+
+          try:
+              sys.stdout.reconfigure(line_buffering=True)
+          except Exception:
+              pass
+
+          def print(*args, **kwargs):
+              kwargs.setdefault("flush", True)
+              ts = datetime.now().strftime("%H:%M:%S")
+              print(f"[{ts}]", *args, **kwargs)
+
+          LIMITE = int(os.environ.get("LIMITE", "50"))
+          MIN_DURACAO = 40 * 60
+          ARQ_ESTADO = "tokyvideo_estado.json"
+          ARQ_TITULOS = "titulos_encontrados.txt"
+
+          # ⭐ CATEGORIAS EXTRAÍDAS DA SUA PRINT
+          CATALOGOS = [
+              "https://www.tokyvideo.com/br/séries/filmes-diversos",
+              "https://www.tokyvideo.com/br/séries/netcine-filmes-e-series-online-gratis",
+              "https://www.tokyvideo.com/br/séries/englobe-filmes-online-gratis",
+              "https://www.tokyvideo.com/br/séries/filmes-de-animacao",
+              "https://www.tokyvideo.com/br/séries/filmes-classicos",
+          ]
+
+          def normalizar(t):
+              t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
+              return t.lower()
+
+          def slugify(t):
+              t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
+              t = re.sub(r"[^\w\s-]", "", t).strip().lower()
+              return re.sub(r"[-\s]+", "-", t)[:80] or "video"
+
+          def parse_duracao(texto):
+              if not texto: return 0
+              m = re.search(r'(\d+)h\s*(\d+)m', texto)
+              if m: return int(m.group(1))*3600 + int(m.group(2))*60
+              m = re.search(r'(\d+):(\d+):(\d+)', texto)
+              if m: return int(m.group(1))*3600 + int(m.group(2))*60 + int(m.group(3))
+              m = re.search(r'(\d+)\s*min', texto)
+              if m: return int(m.group(1))*60
+              return 0
+
+          def gerar_html(titulo, thumb, link, outdir):
+              os.makedirs(outdir, exist_ok=True)
+              filename = os.path.join(outdir, slugify(titulo) + ".html")
+              json_ld = {
+                  "@context": "https://schema.org", "@type": "VideoObject",
+                  "supportPlatform": ["https://schema.org/IOSPlatform","https://schema.org/AndroidPlatform"],
+                  "name": titulo, "description": "Assista " + titulo,
+                  "thumbnailUrl": [thumb] if thumb else [], "contentUrl": link,
+              }
+              tpl = """<!DOCTYPE html>
+          <html lang="pt-BR"><head><meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <script type="application/ld+json">{jl}</script>
+          <title>{t}</title>
+          <style>body{{background:#000;color:#fff;font-family:sans-serif;margin:0;padding:20px}}h1{{font-size:24px;text-align:center;margin-bottom:30px}}</style>
+          </head><body>
+          <h1>{t}</h1>
+          <div style="background:#0b0b12;border-radius:20px;overflow:hidden;box-shadow:0 25px 60px rgba(0,0,0,.8);margin:25px 0;border:1px solid rgba(255,255,255,.06);">
+            <a href="{l}" target="_blank" style="display:block;position:relative;text-decoration:none;">
+              <img src="{th}" style="width:100%;display:block;">
+              <div style="position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,0.7),transparent);"></div>
+              <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:70px;height:70px;background:linear-gradient(135deg,#7a00ff,#c000ff);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 20px rgba(120,0,255,.6);color:white;font-size:26px;border:2px solid rgba(255,255,255,.2);">▶</div>
+              <div style="position:absolute;top:12px;right:12px;background:#ff003c;padding:6px 12px;border-radius:20px;font-size:11px;color:#fff;font-weight:bold;">HD</div>
+            </a>
+          </div></body></html>"""
+              with open(filename, "w", encoding="utf-8") as f:
+                  f.write(tpl.format(jl=json.dumps(json_ld, ensure_ascii=False, indent=2),
+                                     t=html_escape(titulo), l=html_escape(link), th=html_escape(thumb)))
+
+          def carregar_estado():
+              if os.path.exists(ARQ_ESTADO):
+                  try:
+                      with open(ARQ_ESTADO, "r", encoding="utf-8") as f:
+                          return json.load(f)
+                  except Exception:
+                      pass
+              return {"processados": []}
+
+          def salvar_estado(estado):
+              with open(ARQ_ESTADO, "w", encoding="utf-8") as f:
+                  json.dump(estado, f, ensure_ascii=False, indent=2)
+
+          def main():
+              estado = carregar_estado()
+              processados = set(estado.get("processados", []))
+              encontrados = set()
+
+              print(f"🎬 Tokyvideo — limite: {LIMITE} filmes por run")
+              print(f"📂 Já processados anteriormente: {len(processados)}")
+
+              links_coletados = set()
+
+              with sync_playwright() as p:
+                  browser = p.chromium.launch(headless=True)
+                  page = browser.new_page()
+
+                  # 1. Coletar links de todas as categorias
+                  for url_cat in CATALOGOS:
+                      print(f"\n🌐 Abrindo catálogo: {url_cat.split('/')[-1]}")
+                      try:
+                          page.goto(url_cat, timeout=60000)
+                          page.wait_for_timeout(3000)
+
+                          # Rolar para carregar lazy loading
+                          for _ in range(10):
+                              page.mouse.wheel(0, 5000)
+                              page.wait_for_timeout(1000)
+
+                          html = page.content()
+                          soup = BeautifulSoup(html, "html.parser")
+                          cat_links = 0
+                          for a in soup.find_all("a", href=True):
+                              href = a["href"]
+                              if "/br/video/" in href:
+                                  link_abs = href if href.startswith("http") else "https://www.tokyvideo.com" + href
+                                  if link_abs not in links_coletados and link_abs not in processados:
+                                      links_coletados.add(link_abs)
+                                      cat_links += 1
+                          print(f"  → {cat_links} novos links encontrados nesta categoria")
+                      except Exception as e:
+                          print(f"  ⚠️  Erro ao acessar categoria: {e}")
+
+                  print(f"\n🔗 Total de links novos para processar: {len(links_coletados)}")
+
+                  # 2. Processar cada link
+                  novos_html = 0
+                  links_para_processar = list(links_coletados)[:LIMITE * 3] # Pega um pouco a mais pois muitos vão ser < 40 min
+
+                  for i, href in enumerate(links_para_processar, 1):
+                      if novos_html >= LIMITE:
+                          break
+
+                      try:
+                          page.goto(href, timeout=30000)
+                          page.wait_for_timeout(2000)
+
+                          titulo = page.title().replace(" - Tokyvideo", "").strip()
+                          conteudo = page.content()
+                          soup_v = BeautifulSoup(conteudo, "html.parser")
+
+                          # Extrair Duração
+                          dur_texto = ""
+                          m = soup_v.find("meta", {"itemprop": "duration"})
+                          if m and m.get("content"): dur_texto = m["content"]
+                          else:
+                              m = soup_v.find("meta", {"property": "og:video:duration"})
+                              if m and m.get("content"): dur_texto = m["content"]
+                              else:
+                                  texto = soup_v.get_text(" ", strip=True)
+                                  m = re.search(r'\d+h\s*\d+m', texto)
+                                  if m: dur_texto = m.group(0)
+
+                          dur_seg = parse_duracao(dur_texto)
+                          if dur_seg < MIN_DURACAO:
+                              print(f"  [{i}/{len(links_para_processar)}] ⏭️  {titulo[:40]}... (~{dur_seg//60}min) - <40min")
+                              processados.add(href)
+                              continue
+
+                          # Extrair Thumbnail
+                          thumb = ""
+                          og = soup_v.find("meta", property="og:image")
+                          if og: thumb = og.get("content", "")
+
+                          gerar_html(titulo, thumb, href, "output")
+                          encontrados.add(titulo)
+                          processados.add(href)
+                          novos_html += 1
+                          print(f"  [{i}/{len(links_para_processar)}] ✅ {titulo[:50]} ({dur_seg//60}min)")
+
+                      except Exception as e:
+                          print(f"  [{i}/{len(links_para_processar)}] ⚠️  erro: {e}")
+                          continue
+
+                  browser.close()
+
+              estado["processados"] = list(processados)
+              salvar_estado(estado)
+
+              # Atualiza arquivo de títulos
+              titulos_antigos = set()
+              if os.path.exists(ARQ_TITULOS):
+                  with open(ARQ_TITULOS, "r", encoding="utf-8") as f:
+                      titulos_antigos = {l.strip() for l in f if l.strip()}
+              titulos_antigos.update(encontrados)
+              with open(ARQ_TITULOS, "w", encoding="utf-8") as f:
+                  for t in sorted(titulos_antigos):
+                      f.write(t + "\n")
+
+              print(f"\n══════════ RESUMO ══════════")
+              print(f"Novos HTMLs gerados: {novos_html}")
+              print(f"Total de links processados (histórico): {len(processados)}")
+              print("════════════════════════════")
+
+          if __name__ == "__main__":
+              main()
+          PYEOF
+
+      - name: Executar busca
+        env:
+          LIMITE: ${{ inputs.limite || 50 }}
+        run: python tokyvideo.py
+
+      - name: Commit e push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config pull.rebase true
+          mkdir -p output
+          touch tokyvideo_estado.json titulos_encontrados.txt
+          git add output/ tokyvideo_estado.json titulos_encontrados.txt
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração."
+            exit 0
+          fi
+          git commit -m "chore: Tokyvideo Categorias — novos filmes [skip ci]"
+          for i in 1 2 3 4 5; do
+            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
+              echo "✅ Push OK"
+              exit 0
+            fi
+            sleep $((i*5))
+          done
+          exit 1
