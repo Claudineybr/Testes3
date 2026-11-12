@@ -47,7 +47,6 @@ jobs:
           except Exception:
               pass
 
-          # ⭐ CORREÇÃO DO LOOP INFINITO AQUI
           _orig_print = print
           def print(*args, **kwargs):
               kwargs.setdefault("flush", True)
@@ -59,7 +58,6 @@ jobs:
           ARQ_ESTADO = "tokyvideo_estado.json"
           ARQ_TITULOS = "titulos_encontrados.txt"
 
-          # Categorias de filmes
           CATALOGOS = [
               "https://www.tokyvideo.com/br/séries/filmes-diversos",
               "https://www.tokyvideo.com/br/séries/netcine-filmes-e-series-online-gratis",
@@ -77,14 +75,72 @@ jobs:
               t = re.sub(r"[^\w\s-]", "", t).strip().lower()
               return re.sub(r"[-\s]+", "-", t)[:80] or "video"
 
+          # ⭐ PARSER DE DURAÇÃO MAIS ROBUSTO
           def parse_duracao(texto):
               if not texto: return 0
+              texto = str(texto)
+              # Formato ISO 8601 (PT1H32M)
+              m = re.search(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', texto)
+              if m and (m.group(1) or m.group(2) or m.group(3)):
+                  return int(m.group(1) or 0)*3600 + int(m.group(2) or 0)*60 + int(m.group(3) or 0)
+              # Formato 1h 32m ou 1h32m
               m = re.search(r'(\d+)h\s*(\d+)m', texto)
               if m: return int(m.group(1))*3600 + int(m.group(2))*60
+              m = re.search(r'(\d+)h', texto)
+              if m and 'min' not in texto: return int(m.group(1))*3600
+              # Formato 01:32:45
               m = re.search(r'(\d+):(\d+):(\d+)', texto)
               if m: return int(m.group(1))*3600 + int(m.group(2))*60 + int(m.group(3))
+              # Formato 92:45
+              m = re.search(r'(\d+):(\d+)', texto)
+              if m: return int(m.group(1))*60 + int(m.group(2))
+              # Formato 92 min
               m = re.search(r'(\d+)\s*min', texto)
               if m: return int(m.group(1))*60
+              return 0
+
+          # ⭐ EXTRAI DURAÇÃO DE 6 LUGARES DIFERENTES
+          def obter_duracao(html, soup):
+              # 1. JSON-LD
+              for script in soup.find_all("script", type="application/ld+json"):
+                  try:
+                      data = json.loads(script.string)
+                      if isinstance(data, dict) and "duration" in data:
+                          d = parse_duracao(data["duration"])
+                          if d > 0: return d
+                      if isinstance(data, list):
+                          for item in data:
+                              if isinstance(item, dict) and "duration" in item:
+                                  d = parse_duracao(item["duration"])
+                                  if d > 0: return d
+                  except: pass
+              
+              # 2. Meta tags
+              for m in soup.find_all("meta"):
+                  if m.get("itemprop") == "duration" or m.get("property") == "og:video:duration":
+                      d = parse_duracao(m.get("content"))
+                      if d > 0: return d
+              
+              # 3. Regex no HTML bruto
+              m = re.search(r'"duration"\s*:\s*"?(PT[\dHMS]+)"?', html)
+              if m:
+                  d = parse_duracao(m.group(1))
+                  if d > 0: return d
+              
+              # 4. Classes CSS comuns
+              for sel in ["span.duration", "div.duration", ".video-duration", ".time-duration", "[itemprop='duration']", ".entry-duration"]:
+                  el = soup.select_one(sel)
+                  if el:
+                      d = parse_duracao(el.get_text(strip=True))
+                      if d > 0: return d
+              
+              # 5. Procura HH:MM:SS ou MM:SS no texto puro da página
+              texto_pagina = soup.get_text(" ", strip=True)
+              m = re.search(r'\b(\d{1,2}:\d{2}:\d{2})\b', texto_pagina)
+              if m:
+                  d = parse_duracao(m.group(1))
+                  if d > 60: return d # ignora coisas como 1:30
+                  
               return 0
 
           def gerar_html(titulo, thumb, link, outdir):
@@ -121,8 +177,7 @@ jobs:
                   try:
                       with open(ARQ_ESTADO, "r", encoding="utf-8") as f:
                           return json.load(f)
-                  except Exception:
-                      pass
+                  except Exception: pass
               return {"processados": []}
 
           def salvar_estado(estado):
@@ -143,14 +198,11 @@ jobs:
                   browser = p.chromium.launch(headless=True)
                   page = browser.new_page()
 
-                  # 1. Coletar links de todas as categorias
                   for url_cat in CATALOGOS:
                       print(f"\n🌐 Abrindo catálogo: {url_cat.split('/')[-1]}")
                       try:
                           page.goto(url_cat, timeout=60000)
                           page.wait_for_timeout(3000)
-
-                          # Rolar para carregar lazy loading
                           for _ in range(10):
                               page.mouse.wheel(0, 5000)
                               page.wait_for_timeout(1000)
@@ -171,9 +223,7 @@ jobs:
 
                   print(f"\n🔗 Total de links novos para processar: {len(links_coletados)}")
 
-                  # 2. Processar cada link
                   novos_html = 0
-                  # Pega 3x o limite para ter margem de segurança (muitos links serão rejeitados por duração)
                   links_para_processar = list(links_coletados)[:LIMITE * 3] 
 
                   for i, href in enumerate(links_para_processar, 1):
@@ -182,31 +232,40 @@ jobs:
 
                       try:
                           page.goto(href, timeout=30000)
-                          page.wait_for_timeout(2000)
+                          # Espera um pouco mais para o JS carregar o player
+                          page.wait_for_timeout(4000) 
 
-                          titulo = page.title().replace(" - Tokyvideo", "").strip()
                           conteudo = page.content()
                           soup_v = BeautifulSoup(conteudo, "html.parser")
 
-                          # Extrair Duração
-                          dur_texto = ""
-                          m = soup_v.find("meta", {"itemprop": "duration"})
-                          if m and m.get("content"): dur_texto = m["content"]
-                          else:
-                              m = soup_v.find("meta", {"property": "og:video:duration"})
-                              if m and m.get("content"): dur_texto = m["content"]
-                              else:
-                                  texto = soup_v.get_text(" ", strip=True)
-                                  m = re.search(r'\d+h\s*\d+m', texto)
-                                  if m: dur_texto = m.group(0)
+                          # ⭐ Limpar Título
+                          titulo = ""
+                          og_title = soup_v.find("meta", property="og:title")
+                          if og_title: titulo = og_title.get("content", "").strip()
+                          if not titulo:
+                              h1 = soup_v.find("h1")
+                              if h1: titulo = h1.get_text(strip=True)
+                          if not titulo:
+                              titulo = page.title().replace(" - Tokyvideo", "").strip()
+                              
+                          # Remove prefixos/sufixos chatos
+                          titulo = re.sub(r"^Assistir\s+['\"]?|['\"]?\s+Filme.*$", "", titulo, flags=re.IGNORECASE).strip()
+                          titulo = re.sub(r"\s*\|.*$", "", titulo).strip()
 
-                          dur_seg = parse_duracao(dur_texto)
+                          # ⭐ Nova extração de duração
+                          dur_seg = obter_duracao(conteudo, soup_v)
+                          
                           if dur_seg < MIN_DURACAO:
+                              # Se for 0, tenta salvar o HTML num arquivo de debug para o usuário olhar
+                              if dur_seg == 0:
+                                  os.makedirs("debug", exist_ok=True)
+                                  with open(f"debug/{slugify(titulo)}.html", "w", encoding="utf-8") as f:
+                                      f.write(conteudo)
+                                      
                               print(f"  [{i}/{len(links_para_processar)}] ⏭️  {titulo[:40]}... (~{dur_seg//60}min) - <40min")
                               processados.add(href)
                               continue
 
-                          # Extrair Thumbnail
                           thumb = ""
                           og = soup_v.find("meta", property="og:image")
                           if og: thumb = og.get("content", "")
@@ -226,7 +285,6 @@ jobs:
               estado["processados"] = list(processados)
               salvar_estado(estado)
 
-              # Atualiza arquivo de títulos
               titulos_antigos = set()
               if os.path.exists(ARQ_TITULOS):
                   with open(ARQ_TITULOS, "r", encoding="utf-8") as f:
@@ -258,6 +316,10 @@ jobs:
           mkdir -p output
           touch tokyvideo_estado.json titulos_encontrados.txt
           git add output/ tokyvideo_estado.json titulos_encontrados.txt
+          # Adiciona a pasta debug caso tenha sido criada
+          if [ -d "debug" ]; then
+            git add debug/
+          fi
           if git diff --cached --quiet; then
             echo "Nenhuma alteração."
             exit 0
