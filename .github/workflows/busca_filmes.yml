@@ -10,17 +10,22 @@ on:
       lote:
         description: 'Quantos filmes processar nesta execução (1-50)'
         type: number
-        default: 10
+        default: 25
         required: false
       resetar:
         description: '⚠️ Zerar a fila (recomeçar do zero)'
         type: boolean
         default: false
+      auto_run:
+        description: 'Disparar próxima run automaticamente se sobrar fila'
+        type: boolean
+        default: false
   schedule:
-    - cron: '0 */6 * * *'   # a cada 6 horas avança um lote
+    - cron: '0 */6 * * *'
 
 permissions:
   contents: write
+  actions: write     # ⭐ necessário para o gh CLI disparar workflows
 
 concurrency:
   group: busca-filmes
@@ -29,7 +34,7 @@ concurrency:
 jobs:
   buscar:
     runs-on: ubuntu-latest
-    timeout-minutes: 350   # margem de 10 min antes do limite de 6h
+    timeout-minutes: 350
 
     steps:
       - uses: actions/checkout@v4
@@ -56,9 +61,9 @@ jobs:
           ARQ_TITULOS    = "titulos_encontrados.txt"
           ARQ_FILMES_TXT = "filmes.txt"
           INICIO         = time.time()
-          LIMITE_SEG     = 5 * 3600          # 5h — sobra 1h de margem
+          LIMITE_SEG     = 5 * 3600
 
-          LOTE = max(1, min(50, int(os.environ.get("LOTE", "10") or "10")))
+          LOTE    = max(1, min(50, int(os.environ.get("LOTE", "25") or "25")))
           RESETAR = os.environ.get("RESETAR", "").lower() == "true"
 
           BLACKLIST = [
@@ -77,7 +82,6 @@ jobs:
               "the","an","of","in","on","at","to","for","with",
           }
 
-          # ---------- utilitários ----------
           def normalizar(t):
               t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
               return t.lower()
@@ -123,7 +127,6 @@ jobs:
           def tempo_esgotado():
               return (time.time() - INICIO) > LIMITE_SEG
 
-          # ---------- HTML ----------
           def gerar_html(titulo, thumb, link, outdir):
               os.makedirs(outdir, exist_ok=True)
               filename = os.path.join(outdir, slugify(titulo) + ".html")
@@ -153,7 +156,6 @@ jobs:
                   f.write(tpl.format(jl=json.dumps(json_ld,ensure_ascii=False,indent=2),
                                      t=html_escape(titulo), l=html_escape(link), th=html_escape(thumb)))
 
-          # ---------- fila ----------
           def carregar_filmes_txt():
               if not os.path.exists(ARQ_FILMES_TXT): return []
               with open(ARQ_FILMES_TXT,"r",encoding="utf-8") as f:
@@ -174,15 +176,12 @@ jobs:
                   json.dump(estado, f, ensure_ascii=False, indent=2)
 
           def sincronizar(estado, filmes_txt):
-              # Remove da fila quem saiu do filmes.txt
               estado["pendentes"] = [f for f in estado["pendentes"] if f in filmes_txt]
-              # Adiciona novos (nem processados nem pendentes)
               novos = [f for f in filmes_txt
                        if f not in estado["processados"] and f not in estado["pendentes"]]
               estado["pendentes"].extend(novos)
               return novos
 
-          # ---------- extração de duração ----------
           def extrair_duracao_pagina(html):
               soup = BeautifulSoup(html,"html.parser")
               m = soup.find("meta",{"itemprop":"duration"})
@@ -211,7 +210,6 @@ jobs:
               m = re.search(r'"duration"\s*:\s*"?(PT[\dHMS]+)"?', html)
               return iso8601_para_segundos(m.group(1)) if m else 0
 
-          # ---------- sites ----------
           def buscar_tankietube(query, outdir, encontrados):
               n = 0
               try:
@@ -308,7 +306,6 @@ jobs:
                   print(f"    [ERRO Toky] {e}")
               return n
 
-          # ---------- títulos acumulados ----------
           def carregar_titulos():
               if not os.path.exists(ARQ_TITULOS): return set()
               with open(ARQ_TITULOS,"r",encoding="utf-8") as f:
@@ -319,7 +316,6 @@ jobs:
                   for t in sorted(titulos):
                       f.write(t + "\n")
 
-          # ---------- main ----------
           def main():
               filmes_txt = carregar_filmes_txt()
               entrada = os.environ.get("FILMES_INPUT", "").strip()
@@ -345,6 +341,7 @@ jobs:
                   print("\n✅ Fila vazia — nada a processar.")
                   print(f"   Total processados: {total_proc}/{total_geral}")
                   salvar_estado(estado)
+                  with open("/tmp/faltam.txt","w") as f: f.write("0")
                   return
 
               lote = estado["pendentes"][:LOTE]
@@ -369,7 +366,7 @@ jobs:
                   processados_agora += 1
                   gerados_agora += a + b
                   estado["execucoes"] += 1
-                  salvar_estado(estado)  # salva a cada filme (checkpoint)
+                  salvar_estado(estado)
                   salvar_titulos(encontrados)
 
               total_proc = len(estado["processados"])
@@ -384,12 +381,15 @@ jobs:
               if restantes > 0:
                   prox = estado['pendentes'][:3]
                   print(f"Próximo lote começará por   : {', '.join(prox)}{'...' if restantes>3 else ''}")
-                  print("⏭️  Próxima execução automática em até 6h, ou clique em Run workflow.")
               else:
                   print("🎉 Fila concluída!")
               print("════════════════════════════")
 
               salvar_estado(estado)
+
+              # ⭐ grava contagem para o step de auto-chain
+              with open("/tmp/faltam.txt","w") as f:
+                  f.write(str(restantes))
 
           if __name__ == "__main__":
               main()
@@ -398,7 +398,7 @@ jobs:
       - name: Executar busca
         env:
           FILMES_INPUT: ${{ github.event.inputs.filmes }}
-          LOTE: ${{ inputs.lote || 10 }}
+          LOTE: ${{ inputs.lote || 25 }}
           RESETAR: ${{ inputs.resetar || 'false' }}
         run: python busca.py
 
@@ -430,3 +430,49 @@ jobs:
           done
           echo "❌ Push falhou após 5 tentativas."
           exit 1
+
+      # ⭐ NOVO: dispara a próxima run se sobrar fila
+      - name: Disparar próxima run (se fila não vazia)
+        if: |
+          success() && (
+            github.event_name == 'schedule' ||
+            inputs.auto_run == true ||
+            inputs.auto_run == 'true'
+          )
+        env:
+          GH_TOKEN: ${{ secrets.PAT_CHAIN }}
+          REPO: ${{ github.repository }}
+          LOTE_IN: ${{ inputs.lote || '25' }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "⚠️  PAT_CHAIN não configurado: sem auto-chain."
+            echo "   Crie em Settings → Secrets → Actions (PAT clássico com escopo 'workflow')."
+            exit 0
+          fi
+
+          FALTAM=$(cat /tmp/faltam.txt 2>/dev/null || echo 0)
+          echo "📊 Faltam na fila: $FALTAM"
+          if [ "${FALTAM:-0}" -le 0 ]; then
+            echo "✅ Fila concluída — não vou disparar mais nada."
+            exit 0
+          fi
+
+          # Anti-loop: no máximo 60 encadeamentos na última hora
+          LIMITE_ISO=$(date -u -d '60 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          RECENTES=$(gh run list --workflow="busca_filmes.yml" --event workflow_dispatch --limit 100 \
+            --json createdAt --jq "[.[] | select(.createdAt > \"$LIMITE_ISO\")] | length" \
+            --repo "$REPO" 2>/dev/null || echo 0)
+          echo "🔁 Encadeamentos na última hora: $RECENTES"
+          if [ "${RECENTES:-0}" -ge 60 ]; then
+            echo "🛑 Limite de 60 runs/hora atingido — parando auto-chain."
+            exit 0
+          fi
+
+          echo "🚀 Disparando próxima run (lote=$LOTE_IN)..."
+          sleep 30
+          gh workflow run "busca_filmes.yml" --repo "$REPO" --ref "${GITHUB_REF_NAME}" \
+            -f auto_run=true \
+            -f lote="${LOTE_IN}" \
+            -f resetar=false \
+            -f filmes=""
+          echo "✅ Próxima run disparada."
