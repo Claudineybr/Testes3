@@ -13,7 +13,7 @@ on:
         type: boolean
         default: false
       auto_run:
-        description: 'Disparar próxima run automaticamente se sobrar páginas'
+        description: 'Disparar próxima run automaticamente'
         type: boolean
         default: false
   schedule:
@@ -427,6 +427,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config pull.rebase true
+          
+          # ⭐ Correção do erro "Terminal is dumb"
+          export GIT_EDITOR=true
+          git config --global core.editor "true"
+          
           mkdir -p output
           touch tokyvideo_estado.json titulos_encontrados.txt
           git add output/ tokyvideo_estado.json titulos_encontrados.txt
@@ -471,7 +476,8 @@ jobs:
           EOF
               
               git add tokyvideo_estado.json titulos_encontrados.txt
-              git rebase --continue
+              
+              GIT_EDITOR=true git rebase --continue
               
               if git push origin "${GITHUB_REF_NAME}"; then
                 echo "✅ Push OK após resolução de conflito."
