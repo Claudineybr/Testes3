@@ -1,4 +1,4 @@
-name: Buscar Filmes — Tokyvideo Coleções (Auto-Run)
+name: Buscar Filmes — Tokyvideo Coleções (Fila Persistente)
 
 on:
   workflow_dispatch:
@@ -179,9 +179,11 @@ jobs:
               if os.path.exists(ARQ_ESTADO):
                   try:
                       with open(ARQ_ESTADO, "r", encoding="utf-8") as f:
-                          return json.load(f)
+                          est = json.load(f)
+                          if "fila_links" not in est: est["fila_links"] = []
+                          return est
                   except Exception: pass
-              return {"processados": [], "falhas": {}, "pagina_colecao": 1, "colecoes_visitadas": []}
+              return {"processados": [], "falhas": {}, "pagina_colecao": 1, "colecoes_visitadas": [], "fila_links": []}
 
           def salvar_estado(estado):
               with open(ARQ_ESTADO, "w", encoding="utf-8") as f:
@@ -210,19 +212,19 @@ jobs:
               estado = carregar_estado()
               if RESETAR:
                   print("🔄 RESETANDO histórico...")
-                  estado = {"processados": [], "falhas": {}, "pagina_colecao": 1, "colecoes_visitadas": []}
+                  estado = {"processados": [], "falhas": {}, "pagina_colecao": 1, "colecoes_visitadas": [], "fila_links": []}
+                  salvar_estado(estado)
 
               processados = set(estado.get("processados", []))
               falhas = estado.get("falhas", {})
               colecoes_visitadas = set(estado.get("colecoes_visitadas", []))
               pagina_colecao = estado.get("pagina_colecao", 1)
+              fila_links = estado.get("fila_links", [])
               encontrados = set()
               videos_gerados = 0
 
-              print(f"🎬 Tokyvideo — Meta: {LIMITE} vídeos | Página atual: {pagina_colecao}")
-              print(f"📂 Histórico: {len(processados)} vídeos | {len(colecoes_visitadas)} coleções visitadas")
-
-              links_videos_para_processar = set()
+              print(f"🎬 Tokyvideo — Meta: {LIMITE} vídeos")
+              print(f"📂 Histórico: {len(processados)} processados | {len(colecoes_visitadas)} coleções | Fila: {len(fila_links)} links")
 
               with sync_playwright() as p:
                   browser = p.chromium.launch(headless=True)
@@ -231,158 +233,162 @@ jobs:
                   )
                   page = context.new_page()
 
-                  while videos_gerados < LIMITE and pagina_colecao <= 37:
-                      if pagina_colecao == 1:
-                          url_pagina = URL_SERIES_BASE
-                      else:
-                          url_pagina = f"{URL_SERIES_BASE}/{pagina_colecao}"
-
-                      print(f"\n👥 Varrendo Página {pagina_colecao}/37")
-                      print(f"  URL: {url_pagina}")
-
-                      try:
-                          page.goto(url_pagina, timeout=60000)
-                          page.wait_for_timeout(4000)
+                  while videos_gerados < LIMITE:
+                      
+                      # ========================================================
+                      # FASE 1: SE A FILA ESTIVER VAZIA, BUSCA MAIS LINKS
+                      # ========================================================
+                      if not fila_links:
+                          if pagina_colecao > 37:
+                              print("\n🏁 Fim das 37 páginas. Nada mais a coletar.")
+                              break
                           
-                          for _ in range(8):
-                              page.mouse.wheel(0, 6000)
-                              page.wait_for_timeout(800)
+                          if pagina_colecao == 1:
+                              url_pagina = URL_SERIES_BASE
+                          else:
+                              url_pagina = f"{URL_SERIES_BASE}/{pagina_colecao}"
 
-                          html = page.content()
-                          soup_p = BeautifulSoup(html, "html.parser")
+                          print(f"\n👥 Varrendo Página {pagina_colecao}/37 para encher a fila")
                           
-                          colecoes = extrair_colecoes(html, soup_p)
-                          colecoes_novas = colecoes - colecoes_visitadas
-                          
-                          print(f"  → {len(colecoes)} coleções encontradas, {len(colecoes_novas)} são novas")
-                          
-                          if not colecoes_novas:
-                              print("  ℹ️  Nenhuma coleção nova nesta página")
-                              if colecoes:
-                                  amostra = list(colecoes)[:3]
-                                  print(f"     Amostra: {[c.split('/')[-1][:30] for c in amostra]}")
-                              pagina_colecao += 1
-                              continue
-
-                          for c in list(colecoes_novas)[:5]:
-                              print(f"     • {c.split('/')[-1][:50]}")
-
-                          for colecao in colecoes_novas:
-                              if videos_gerados >= LIMITE: break
-                              if colecao in colecoes_visitadas: continue
-
-                              try:
-                                  print(f"    🔍 Entrando: {colecao.split('/')[-1][:40]}")
-                                  page.goto(colecao, timeout=30000)
-                                  page.wait_for_timeout(2000)
-                                  
-                                  for _ in range(3):
-                                      page.mouse.wheel(0, 4000)
-                                      page.wait_for_timeout(800)
-                                  
-                                  soup_colecao = BeautifulSoup(page.content(), "html.parser")
-
-                                  cat_links = 0
-                                  for a_v in soup_colecao.find_all("a", href=True):
-                                      if "/br/video/" in a_v["href"]:
-                                          lk_v = a_v["href"] if a_v["href"].startswith("http") else "https://www.tokyvideo.com" + a_v["href"]
-                                          if lk_v not in processados and falhas.get(lk_v, 0) < 3:
-                                              links_videos_para_processar.add(lk_v)
-                                              cat_links += 1
-                                  
-                                  colecoes_visitadas.add(colecao)
-                                  print(f"      ✓ {cat_links} vídeos novos")
-
-                              except Exception as e:
-                                  print(f"    ⚠️ Erro: {str(e)[:40]}")
-                                  colecoes_visitadas.add(colecao)
-
-                              if len(links_videos_para_processar) > 40:
-                                  break
-
-                      except Exception as e:
-                          print(f"  ⚠️ Erro na página {pagina_colecao}: {str(e)[:60]}")
-
-                      pagina_colecao += 1
-                      if len(links_videos_para_processar) > 40:
-                          break
-
-                  print(f"\n🎞️  Links de vídeos coletados: {len(links_videos_para_processar)}")
-
-                  for i, href in enumerate(list(links_videos_para_processar)):
-                      if videos_gerados >= LIMITE: break
-
-                      page_v = context.new_page()
-                      duracao_rede = {"valor": 0}
-
-                      def handler(resp):
                           try:
-                              ct = resp.headers.get("content-type", "")
-                              if "json" in ct or "javascript" in ct:
-                                  if resp.status == 200:
-                                      txt = resp.text()
-                                      if len(txt) > 500000: return
-                                      if "duration" in txt.lower():
-                                          try:
-                                              data = json.loads(txt)
-                                              d = extrair_duracao_de_json(data)
-                                              if d > duracao_rede["valor"]: duracao_rede["valor"] = d
-                                          except:
-                                              m = re.search(r'"duration"\s*:\s*"?(\d+|PT[\dHMS]+)"?', txt)
-                                              if m:
-                                                  d = parse_duracao(m.group(1))
-                                                  if d > duracao_rede["valor"]: duracao_rede["valor"] = d
-                          except: pass
+                              page.goto(url_pagina, timeout=60000)
+                              page.wait_for_timeout(4000)
+                              
+                              for _ in range(8):
+                                  page.mouse.wheel(0, 6000)
+                                  page.wait_for_timeout(800)
 
-                      page_v.on("response", handler)
+                              html = page.content()
+                              soup_p = BeautifulSoup(html, "html.parser")
+                              
+                              colecoes = extrair_colecoes(html, soup_p)
+                              colecoes_novas = colecoes - colecoes_visitadas
+                              
+                              print(f"  → {len(colecoes)} coleções encontradas, {len(colecoes_novas)} novas")
 
-                      try:
-                          page_v.goto(href, timeout=30000, wait_until="domcontentloaded")
-                          try: page_v.wait_for_load_state("networkidle", timeout=10000)
-                          except: pass
-                          page_v.wait_for_timeout(1000)
+                              # Visita TODAS as coleções novas para pegar os links
+                              for colecao in colecoes_novas:
+                                  try:
+                                      print(f"    🔍 Entrando: {colecao.split('/')[-1][:40]}")
+                                      page.goto(colecao, timeout=30000)
+                                      page.wait_for_timeout(2000)
+                                      
+                                      for _ in range(3):
+                                          page.mouse.wheel(0, 4000)
+                                          page.wait_for_timeout(800)
+                                      
+                                      soup_colecao = BeautifulSoup(page.content(), "html.parser")
+                                      
+                                      for a_v in soup_colecao.find_all("a", href=True):
+                                          if "/br/video/" in a_v["href"]:
+                                              lk_v = a_v["href"] if a_v["href"].startswith("http") else "https://www.tokyvideo.com" + a_v["href"]
+                                              if lk_v not in processados and falhas.get(lk_v, 0) < 3 and lk_v not in fila_links:
+                                                  fila_links.append(lk_v)
+                                      
+                                      colecoes_visitadas.add(colecao)
+                                  except Exception as e:
+                                      print(f"    ⚠️ Erro: {str(e)[:40]}")
+                                      colecoes_visitadas.add(colecao)
 
-                          conteudo = page_v.content()
-                          soup_v = BeautifulSoup(conteudo, "html.parser")
+                              pagina_colecao += 1
+                              estado["fila_links"] = fila_links
+                              estado["pagina_colecao"] = pagina_colecao
+                              estado["colecoes_visitadas"] = list(colecoes_visitadas)
+                              salvar_estado(estado)
+                              
+                              print(f"  ✅ Fila abastecida com {len(fila_links)} links. Próxima página: {pagina_colecao}")
 
-                          titulo = ""
-                          og_title = soup_v.find("meta", property="og:title")
-                          if og_title: titulo = og_title.get("content", "").strip()
-                          if not titulo:
-                              h1 = soup_v.find("h1")
-                              if h1: titulo = h1.get_text(strip=True)
-                          if not titulo: titulo = page_v.title().replace(" - Tokyvideo", "").strip()
-
-                          titulo = re.sub(r"^Assistir\s+['\"]?|['\"]?\s+Filme.*$", "", titulo, flags=re.IGNORECASE).strip()
-                          titulo = re.sub(r"\s*\|.*$", "", titulo).strip()
-
-                          dur = duracao_rede["valor"] if duracao_rede["valor"] > 0 else obter_duracao_html(conteudo, soup_v)
-
-                          if dur < MIN_DURACAO:
-                              if dur == 0:
-                                  falhas[href] = falhas.get(href, 0) + 1
-                                  print(f"  ❓ {titulo[:40]}... (0min - {falhas[href]}/3)")
-                              else:
-                                  processados.add(href)
-                              page_v.close()
+                          except Exception as e:
+                              print(f"  ⚠️ Erro ao acessar página: {str(e)[:60]}")
+                              pagina_colecao += 1
+                              estado["pagina_colecao"] = pagina_colecao
+                              salvar_estado(estado)
                               continue
 
-                          thumb = ""
-                          og = soup_v.find("meta", property="og:image")
-                          if og: thumb = og.get("content", "")
+                      # ========================================================
+                      # FASE 2: PROCESSA OS LINKS DA FILA
+                      # ========================================================
+                      print(f"\n🎞️  Processando fila... ({len(fila_links)} links restantes)")
+                      
+                      while fila_links and videos_gerados < LIMITE:
+                          href = fila_links[0] # Pega o primeiro sem remover ainda
+                          
+                          page_v = context.new_page()
+                          duracao_rede = {"valor": 0}
 
-                          gerar_html(titulo, thumb, href, "output")
-                          encontrados.add(titulo)
-                          processados.add(href)
-                          if href in falhas: del falhas[href]
-                          videos_gerados += 1
-                          print(f"  ✅ {titulo[:50]} ({dur//60}min)")
+                          def handler(resp):
+                              try:
+                                  ct = resp.headers.get("content-type", "")
+                                  if "json" in ct or "javascript" in ct:
+                                      if resp.status == 200:
+                                          txt = resp.text()
+                                          if len(txt) > 500000: return
+                                          if "duration" in txt.lower():
+                                              try:
+                                                  data = json.loads(txt)
+                                                  d = extrair_duracao_de_json(data)
+                                                  if d > duracao_rede["valor"]: duracao_rede["valor"] = d
+                                              except:
+                                                  m = re.search(r'"duration"\s*:\s*"?(\d+|PT[\dHMS]+)"?', txt)
+                                                  if m:
+                                                      d = parse_duracao(m.group(1))
+                                                      if d > duracao_rede["valor"]: duracao_rede["valor"] = d
+                              except: pass
 
-                      except Exception as e:
-                          falhas[href] = falhas.get(href, 0) + 1
-                          print(f"  ⚠️ erro: {str(e)[:30]} ({falhas[href]}/3)")
-                      finally:
-                          page_v.close()
+                          page_v.on("response", handler)
+
+                          try:
+                              page_v.goto(href, timeout=30000, wait_until="domcontentloaded")
+                              try: page_v.wait_for_load_state("networkidle", timeout=10000)
+                              except: pass
+                              page_v.wait_for_timeout(1000)
+
+                              conteudo = page_v.content()
+                              soup_v = BeautifulSoup(conteudo, "html.parser")
+
+                              titulo = ""
+                              og_title = soup_v.find("meta", property="og:title")
+                              if og_title: titulo = og_title.get("content", "").strip()
+                              if not titulo:
+                                  h1 = soup_v.find("h1")
+                                  if h1: titulo = h1.get_text(strip=True)
+                              if not titulo: titulo = page_v.title().replace(" - Tokyvideo", "").strip()
+
+                              titulo = re.sub(r"^Assistir\s+['\"]?|['\"]?\s+Filme.*$", "", titulo, flags=re.IGNORECASE).strip()
+                              titulo = re.sub(r"\s*\|.*$", "", titulo).strip()
+
+                              dur = duracao_rede["valor"] if duracao_rede["valor"] > 0 else obter_duracao_html(conteudo, soup_v)
+
+                              if dur < MIN_DURACAO:
+                                  if dur == 0:
+                                      falhas[href] = falhas.get(href, 0) + 1
+                                      print(f"  ❓ {titulo[:40]}... (0min - {falhas[href]}/3)")
+                                  else:
+                                      processados.add(href)
+                              else:
+                                  thumb = ""
+                                  og = soup_v.find("meta", property="og:image")
+                                  if og: thumb = og.get("content", "")
+
+                                  gerar_html(titulo, thumb, href, "output")
+                                  encontrados.add(titulo)
+                                  processados.add(href)
+                                  if href in falhas: del falhas[href]
+                                  videos_gerados += 1
+                                  print(f"  ✅ {titulo[:50]} ({dur//60}min)")
+
+                          except Exception as e:
+                              falhas[href] = falhas.get(href, 0) + 1
+                              print(f"  ⚠️ erro: {str(e)[:30]} ({falhas[href]}/3)")
+                          finally:
+                              page_v.close()
+                              
+                              # Remove da fila e salva o progresso
+                              fila_links.pop(0)
+                              estado["fila_links"] = fila_links
+                              estado["processados"] = list(processados)
+                              estado["falhas"] = falhas
+                              salvar_estado(estado)
 
                   context.close()
                   browser.close()
@@ -391,6 +397,7 @@ jobs:
               estado["falhas"] = falhas
               estado["colecoes_visitadas"] = list(colecoes_visitadas)
               estado["pagina_colecao"] = pagina_colecao
+              estado["fila_links"] = fila_links
               salvar_estado(estado)
 
               titulos_antigos = set()
@@ -405,9 +412,10 @@ jobs:
               print(f"\n══════════ RESUMO ══════════")
               print(f"Novos HTMLs: {videos_gerados}")
               print(f"Coleções visitadas: {len(colecoes_visitadas)} | Próxima página: {pagina_colecao}")
+              print(f"Links restantes na fila: {len(fila_links)}")
               print("════════════════════════════")
 
-              if pagina_colecao <= 37 or len(links_videos_para_processar) > 40:
+              if pagina_colecao <= 37 or len(fila_links) > 0:
                   with open("/tmp/faltam.txt", "w") as f: f.write("1")
               else:
                   with open("/tmp/faltam.txt", "w") as f: f.write("0")
@@ -428,7 +436,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config pull.rebase true
           
-          # ⭐ Correção do erro "Terminal is dumb"
           export GIT_EDITOR=true
           git config --global core.editor "true"
           
@@ -461,7 +468,7 @@ jobs:
                   with open("tokyvideo_estado.json", "r", encoding="utf-8") as f:
                       local = json.load(f)
               except:
-                  local = {"processados": [], "falhas": {}, "pagina_colecao": 1, "colecoes_visitadas": []}
+                  local = {"processados": [], "falhas": {}, "pagina_colecao": 1, "colecoes_visitadas": [], "fila_links": []}
               
               with open("tokyvideo_estado.json", "w", encoding="utf-8") as f:
                   json.dump(local, f, ensure_ascii=False, indent=2)
