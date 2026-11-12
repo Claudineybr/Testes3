@@ -9,7 +9,7 @@ on:
         default: 50
         required: false
       resetar:
-        description: '⚠️ Zerar histórico de links'
+        description: '⚠️ Zerar histórico'
         type: boolean
         default: false
   schedule:
@@ -45,6 +45,7 @@ jobs:
           from playwright.sync_api import sync_playwright
           from bs4 import BeautifulSoup
           from html import escape as html_escape
+          from urllib.parse import unquote
 
           try:
               sys.stdout.reconfigure(line_buffering=True)
@@ -63,7 +64,7 @@ jobs:
           ARQ_ESTADO = "tokyvideo_estado.json"
           ARQ_TITULOS = "titulos_encontrados.txt"
 
-          # URL base das páginas de séries/coleções
+          # ⭐ URL base correta (com acento)
           URL_SERIES_BASE = "https://www.tokyvideo.com/br/séries"
 
           def slugify(t):
@@ -179,6 +180,31 @@ jobs:
               with open(ARQ_ESTADO, "w", encoding="utf-8") as f:
                   json.dump(estado, f, ensure_ascii=False, indent=2)
 
+          # ⭐ NOVO: extrai links de coleções com filtro robusto (acento + paginação)
+          def extrair_colecoes(html, soup):
+              colecoes = set()
+              
+              # 1. Pelo BeautifulSoup (href direto)
+              for a in soup.find_all("a", href=True):
+                  h = a["href"]
+                  # Aceita séries, series, séries (com/sem acento)
+                  if re.search(r'/br/s[ée]ries/[a-z0-9\-]+$', h, re.IGNORECASE):
+                      # Ignora se for só paginação (/br/séries/2)
+                      if re.search(r'/br/s[ée]ries/\d+$', h, re.IGNORECASE):
+                          continue
+                      lk = h if h.startswith("http") else "https://www.tokyvideo.com" + h
+                      colecoes.add(unquote(lk))
+              
+              # 2. Fallback: regex no HTML bruto (pega links que o BS não viu)
+              raw_links = re.findall(r'href="(/br/s[ée]ries/[a-z0-9\-]+)"', html, re.IGNORECASE)
+              for h in raw_links:
+                  if re.search(r'/br/s[ée]ries/\d+$', h, re.IGNORECASE):
+                      continue
+                  lk = "https://www.tokyvideo.com" + h
+                  colecoes.add(unquote(lk))
+              
+              return colecoes
+
           def main():
               estado = carregar_estado()
               if RESETAR:
@@ -192,7 +218,7 @@ jobs:
               encontrados = set()
               videos_gerados = 0
 
-              print(f"🎬 Tokyvideo — Meta: {LIMITE} filmes | Página de Coleção atual: {pagina_colecao}")
+              print(f"🎬 Tokyvideo — Meta: {LIMITE} filmes | Página atual: {pagina_colecao}")
               print(f"📂 Histórico: {len(processados)} filmes | {len(colecoes_visitadas)} coleções visitadas")
 
               links_videos_para_processar = set()
@@ -204,52 +230,62 @@ jobs:
                   )
                   page = context.new_page()
 
-                  # --- VARREDURA DE COLEÇÕES (37 páginas) ---
+                  # --- VARREDURA DE COLEÇÕES ---
                   while videos_gerados < LIMITE and pagina_colecao <= 37:
                       if pagina_colecao == 1:
                           url_pagina = URL_SERIES_BASE
                       else:
                           url_pagina = f"{URL_SERIES_BASE}/{pagina_colecao}"
 
-                      print(f"\n👥 Varrendo Coleções - Página {pagina_colecao}/37")
+                      print(f"\n👥 Varrendo Página {pagina_colecao}/37")
                       print(f"  URL: {url_pagina}")
 
                       try:
                           page.goto(url_pagina, timeout=60000)
-                          page.wait_for_timeout(3000) 
-                          for _ in range(5):
-                              page.mouse.wheel(0, 5000)
-                              page.wait_for_timeout(1000)
+                          page.wait_for_timeout(4000)
+                          
+                          # Rola várias vezes para carregar lazy loading completo
+                          for _ in range(8):
+                              page.mouse.wheel(0, 6000)
+                              page.wait_for_timeout(800)
 
-                          soup_p = BeautifulSoup(page.content(), "html.parser")
-                          links_colecoes = set()
-
-                          # ⭐ MUDANÇA PRINCIPAL AQUI: Procura por /br/series/ e /br/playlist/
-                          for a in soup_p.find_all("a", href=True):
-                              h = a["href"]
-                              # Evita pegar a paginação (/br/séries/2) e pega o slug real
-                              if re.search(r'/br/(series|playlist)/[^/]+', h) and not h.endswith(("/2", "/3", "/4", "/5", "/6", "/7")):
-                                  lk = h if h.startswith("http") else "https://www.tokyvideo.com" + h
-                                  links_colecoes.add(lk)
-
-                          print(f"  → {len(links_colecoes)} coleções encontradas nesta página")
-
-                          if not links_colecoes:
-                              print("  ⚠️ Nenhuma coleção encontrada. Pulando página...")
+                          html = page.content()
+                          soup_p = BeautifulSoup(html, "html.parser")
+                          
+                          colecoes = extrair_colecoes(html, soup_p)
+                          colecoes_novas = colecoes - colecoes_visitadas
+                          
+                          print(f"  → {len(colecoes)} coleções encontradas, {len(colecoes_novas)} são novas")
+                          
+                          if not colecoes_novas:
+                              print("  ℹ️  Nenhuma coleção nova nesta página")
+                              # Mostra amostra das encontradas (debug)
+                              if colecoes:
+                                  amostra = list(colecoes)[:3]
+                                  print(f"     Amostra: {[c.split('/')[-1][:30] for c in amostra]}")
                               pagina_colecao += 1
                               continue
 
-                          for colecao in links_colecoes:
+                          # Mostra as primeiras 5 para o log
+                          for c in list(colecoes_novas)[:5]:
+                              print(f"     • {c.split('/')[-1][:50]}")
+
+                          for colecao in colecoes_novas:
                               if videos_gerados >= LIMITE: break
                               if colecao in colecoes_visitadas: continue
 
                               try:
-                                  print(f"    🔍 Entrando na coleção: {colecao.split('/')[-1][:40]}")
+                                  print(f"    🔍 Entrando: {colecao.split('/')[-1][:40]}")
                                   page.goto(colecao, timeout=30000)
-                                  page.wait_for_timeout(1500)
+                                  page.wait_for_timeout(2000)
+                                  
+                                  # Rola para carregar vídeos da coleção
+                                  for _ in range(3):
+                                      page.mouse.wheel(0, 4000)
+                                      page.wait_for_timeout(800)
+                                  
                                   soup_colecao = BeautifulSoup(page.content(), "html.parser")
 
-                                  # Extrai links de vídeos da coleção
                                   cat_links = 0
                                   for a_v in soup_colecao.find_all("a", href=True):
                                       if "/br/video/" in a_v["href"]:
@@ -259,22 +295,23 @@ jobs:
                                               cat_links += 1
                                   
                                   colecoes_visitadas.add(colecao)
-                                  print(f"      ✓ {cat_links} vídeos novos encontrados")
+                                  print(f"      ✓ {cat_links} vídeos novos")
 
                               except Exception as e:
-                                  print(f"    ⚠️ Erro na coleção: {str(e)[:40]}")
+                                  print(f"    ⚠️ Erro: {str(e)[:40]}")
+                                  colecoes_visitadas.add(colecao)
 
-                              if len(links_videos_para_processar) > 30:
+                              if len(links_videos_para_processar) > 40:
                                   break
 
                       except Exception as e:
                           print(f"  ⚠️ Erro na página {pagina_colecao}: {str(e)[:60]}")
 
                       pagina_colecao += 1
-                      if len(links_videos_para_processar) > 30:
-                          break 
+                      if len(links_videos_para_processar) > 40:
+                          break
 
-                  print(f"\n🎞️  Links de vídeos coletados para processar agora: {len(links_videos_para_processar)}")
+                  print(f"\n🎞️  Links de vídeos coletados: {len(links_videos_para_processar)}")
 
                   # --- PROCESSAR VÍDEOS ---
                   for i, href in enumerate(list(links_videos_para_processar)):
@@ -348,7 +385,7 @@ jobs:
 
                       except Exception as e:
                           falhas[href] = falhas.get(href, 0) + 1
-                          print(f"  ⚠️ erro no vídeo: {str(e)[:30]} ({falhas[href]}/3)")
+                          print(f"  ⚠️ erro: {str(e)[:30]} ({falhas[href]}/3)")
                       finally:
                           page_v.close()
 
@@ -372,8 +409,8 @@ jobs:
                       f.write(t + "\n")
 
               print(f"\n══════════ RESUMO ══════════")
-              print(f"Novos HTMLs gerados: {videos_gerados}")
-              print(f"Coleções visitadas: {len(colecoes_visitadas)} (Próxima página: {pagina_colecao})")
+              print(f"Novos HTMLs: {videos_gerados}")
+              print(f"Coleções visitadas: {len(colecoes_visitadas)} | Próxima página: {pagina_colecao}")
               print("════════════════════════════")
 
           if __name__ == "__main__":
