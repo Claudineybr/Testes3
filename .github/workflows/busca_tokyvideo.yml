@@ -1,23 +1,31 @@
-name: Buscar Filmes — Tokyvideo Coleções (Playwright)
+name: Buscar Filmes — Tokyvideo Coleções (Auto-Run)
 
 on:
   workflow_dispatch:
     inputs:
       limite:
-        description: 'Quantos filmes processar NESTA execução (1-100)'
+        description: 'Quantos vídeos processar NESTA execução (1-100)'
         type: number
         default: 50
         required: false
       resetar:
-        description: '⚠️ Zerar histórico'
+        description: '⚠️ Zerar histórico (recomeçar do zero)'
+        type: boolean
+        default: false
+      auto_run:
+        description: 'Disparar próxima run automaticamente se sobrar páginas'
         type: boolean
         default: false
   schedule:
-    - cron: '0 6 * * 1'
+    - cron: '0 6 * * 1' # Toda segunda às 6h (também vai disparar auto_run)
 
 permissions:
   contents: write
-  actions: write
+  actions: write # ⭐ Necessário para o auto-run
+
+concurrency:
+  group: busca-tokyvideo
+  cancel-in-progress: false
 
 jobs:
   buscar:
@@ -64,7 +72,6 @@ jobs:
           ARQ_ESTADO = "tokyvideo_estado.json"
           ARQ_TITULOS = "titulos_encontrados.txt"
 
-          # ⭐ URL base correta (com acento)
           URL_SERIES_BASE = "https://www.tokyvideo.com/br/séries"
 
           def slugify(t):
@@ -180,22 +187,16 @@ jobs:
               with open(ARQ_ESTADO, "w", encoding="utf-8") as f:
                   json.dump(estado, f, ensure_ascii=False, indent=2)
 
-          # ⭐ NOVO: extrai links de coleções com filtro robusto (acento + paginação)
           def extrair_colecoes(html, soup):
               colecoes = set()
-              
-              # 1. Pelo BeautifulSoup (href direto)
               for a in soup.find_all("a", href=True):
                   h = a["href"]
-                  # Aceita séries, series, séries (com/sem acento)
                   if re.search(r'/br/s[ée]ries/[a-z0-9\-]+$', h, re.IGNORECASE):
-                      # Ignora se for só paginação (/br/séries/2)
                       if re.search(r'/br/s[ée]ries/\d+$', h, re.IGNORECASE):
                           continue
                       lk = h if h.startswith("http") else "https://www.tokyvideo.com" + h
                       colecoes.add(unquote(lk))
               
-              # 2. Fallback: regex no HTML bruto (pega links que o BS não viu)
               raw_links = re.findall(r'href="(/br/s[ée]ries/[a-z0-9\-]+)"', html, re.IGNORECASE)
               for h in raw_links:
                   if re.search(r'/br/s[ée]ries/\d+$', h, re.IGNORECASE):
@@ -218,8 +219,8 @@ jobs:
               encontrados = set()
               videos_gerados = 0
 
-              print(f"🎬 Tokyvideo — Meta: {LIMITE} filmes | Página atual: {pagina_colecao}")
-              print(f"📂 Histórico: {len(processados)} filmes | {len(colecoes_visitadas)} coleções visitadas")
+              print(f"🎬 Tokyvideo — Meta: {LIMITE} vídeos | Página atual: {pagina_colecao}")
+              print(f"📂 Histórico: {len(processados)} vídeos | {len(colecoes_visitadas)} coleções visitadas")
 
               links_videos_para_processar = set()
 
@@ -230,7 +231,6 @@ jobs:
                   )
                   page = context.new_page()
 
-                  # --- VARREDURA DE COLEÇÕES ---
                   while videos_gerados < LIMITE and pagina_colecao <= 37:
                       if pagina_colecao == 1:
                           url_pagina = URL_SERIES_BASE
@@ -244,7 +244,6 @@ jobs:
                           page.goto(url_pagina, timeout=60000)
                           page.wait_for_timeout(4000)
                           
-                          # Rola várias vezes para carregar lazy loading completo
                           for _ in range(8):
                               page.mouse.wheel(0, 6000)
                               page.wait_for_timeout(800)
@@ -259,14 +258,12 @@ jobs:
                           
                           if not colecoes_novas:
                               print("  ℹ️  Nenhuma coleção nova nesta página")
-                              # Mostra amostra das encontradas (debug)
                               if colecoes:
                                   amostra = list(colecoes)[:3]
                                   print(f"     Amostra: {[c.split('/')[-1][:30] for c in amostra]}")
                               pagina_colecao += 1
                               continue
 
-                          # Mostra as primeiras 5 para o log
                           for c in list(colecoes_novas)[:5]:
                               print(f"     • {c.split('/')[-1][:50]}")
 
@@ -279,7 +276,6 @@ jobs:
                                   page.goto(colecao, timeout=30000)
                                   page.wait_for_timeout(2000)
                                   
-                                  # Rola para carregar vídeos da coleção
                                   for _ in range(3):
                                       page.mouse.wheel(0, 4000)
                                       page.wait_for_timeout(800)
@@ -313,7 +309,6 @@ jobs:
 
                   print(f"\n🎞️  Links de vídeos coletados: {len(links_videos_para_processar)}")
 
-                  # --- PROCESSAR VÍDEOS ---
                   for i, href in enumerate(list(links_videos_para_processar)):
                       if videos_gerados >= LIMITE: break
 
@@ -392,7 +387,6 @@ jobs:
                   context.close()
                   browser.close()
 
-              # Salva estado
               estado["processados"] = list(processados)
               estado["falhas"] = falhas
               estado["colecoes_visitadas"] = list(colecoes_visitadas)
@@ -412,6 +406,12 @@ jobs:
               print(f"Novos HTMLs: {videos_gerados}")
               print(f"Coleções visitadas: {len(colecoes_visitadas)} | Próxima página: {pagina_colecao}")
               print("════════════════════════════")
+
+              # ⭐ Sinaliza para o GitHub Actions se ainda tem trabalho
+              if pagina_colecao <= 37 or len(links_videos_para_processar) > 40:
+                  with open("/tmp/faltam.txt", "w") as f: f.write("1")
+              else:
+                  with open("/tmp/faltam.txt", "w") as f: f.write("0")
 
           if __name__ == "__main__":
               main()
@@ -435,7 +435,7 @@ jobs:
             echo "Nenhuma alteração."
             exit 0
           fi
-          git commit -m "chore: Tokyvideo Coleções — novos filmes [skip ci]"
+          git commit -m "chore: Tokyvideo Coleções — novos vídeos [skip ci]"
           for i in 1 2 3 4 5; do
             if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
               echo "✅ Push OK"
@@ -444,3 +444,47 @@ jobs:
             sleep $((i*5))
           done
           exit 1
+
+      # ⭐ NOVO STEP: AUTO-RUN
+      - name: Disparar próxima run (se fila não vazia)
+        if: |
+          success() && (
+            github.event_name == 'schedule' ||
+            inputs.auto_run == true ||
+            inputs.auto_run == 'true'
+          )
+        env:
+          GH_TOKEN: ${{ secrets.PAT_CHAIN }}
+          REPO: ${{ github.repository }}
+          LIMITE_IN: ${{ inputs.limite || 50 }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "⚠️  PAT_CHAIN não configurado: sem auto-chain."
+            exit 0
+          fi
+
+          FALTAM=$(cat /tmp/faltam.txt 2>/dev/null || echo 0)
+          echo "📊 Faltam páginas/vídeos: $FALTAM"
+          if [ "${FALTAM:-0}" -le 0 ]; then
+            echo "✅ Fila concluída — não vou disparar mais nada."
+            exit 0
+          fi
+
+          # Limite de 20 runs/hora (Playwright consome mais recursos)
+          LIMITE_ISO=$(date -u -d '60 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          RECENTES=$(gh run list --workflow="busca_tokyvideo.yml" --event workflow_dispatch --limit 100 \
+            --json createdAt --jq "[.[] | select(.createdAt > \"$LIMITE_ISO\")] | length" \
+            --repo "$REPO" 2>/dev/null || echo 0)
+          echo "🔁 Encadeamentos na última hora: $RECENTES"
+          if [ "${RECENTES:-0}" -ge 20 ]; then
+            echo "🛑 Limite de 20 runs/hora atingido — parando auto-chain."
+            exit 0
+          fi
+
+          echo "🚀 Disparando próxima run (limite=$LIMITE_IN)..."
+          sleep 30
+          gh workflow run "busca_tokyvideo.yml" --repo "$REPO" --ref "${GITHUB_REF_NAME}" \
+            -f auto_run=true \
+            -f limite="${LIMITE_IN}" \
+            -f resetar=false
+          echo "✅ Próxima run disparada."
