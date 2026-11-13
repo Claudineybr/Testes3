@@ -1,40 +1,23 @@
-name: Gerar filmes.txt via TMDB (append 2x/dia)
+name: Gerar filmes.txt via TMDB (Top 3 Categorias)
 
 on:
   workflow_dispatch:
     inputs:
-      quantidade:
-        description: 'Quantos filmes buscar no TMDB (100-10000)'
-        type: number
-        default: 10000
-        required: true
-      ordenar_por:
-        description: 'Ordenar por'
-        type: choice
-        options:
-          - popularity
-          - vote_average
-          - revenue
-        default: popularity
       ano_min:
         description: 'Ano mínimo'
         type: number
-        default: 2000
+        default: 1950
         required: false
       ano_max:
         description: 'Ano máximo'
         type: number
-        default: 2025
+        default: 2026
         required: false
       idioma:
-        description: 'Idioma dos títulos'
+        description: 'Idioma dos títulos (pt-BR)'
         default: 'pt-BR'
-      forcar_substituir:
-        description: '⚠️ Substituir tudo (apaga filmes.txt atual)'
-        type: boolean
-        default: false
   schedule:
-    - cron: '0 0,12 * * *'   # 00h e 12h UTC = 21h e 09h BRT
+    - cron: '0 0 * * 0'   # Todo domingo à meia-noite
 
 permissions:
   contents: write
@@ -58,15 +41,12 @@ jobs:
       - name: Instalar dependências
         run: pip install requests
 
-      - name: Gerar lista via TMDB
+      - name: Gerar lista via TMDB (3 categorias)
         env:
           TMDB_KEY: ${{ secrets.TMDB_API_KEY }}
-          QUANTIDADE: ${{ inputs.quantidade || 10000 }}
-          ORDENAR: ${{ inputs.ordenar_por || 'popularity' }}
-          ANO_MIN: ${{ inputs.ano_min || '2000' }}
-          ANO_MAX: ${{ inputs.ano_max || '2025' }}
+          ANO_MIN: ${{ inputs.ano_min || '1950' }}
+          ANO_MAX: ${{ inputs.ano_max || '2026' }}
           LANG: ${{ inputs.idioma || 'pt-BR' }}
-          FORCAR_SUBSTITUIR: ${{ inputs.forcar_substituir || 'false' }}
           PYTHONUNBUFFERED: "1"
         run: |
           python -u - <<'PYEOF'
@@ -85,150 +65,109 @@ jobs:
               _orig_print(f"[{ts}]", *args, **kwargs)
 
           KEY = os.environ["TMDB_KEY"]
-          QTD = int(os.environ.get("QUANTIDADE", "10000"))
-          ORD = os.environ.get("ORDENAR", "popularity")
-          ANO_MIN = os.environ.get("ANO_MIN") or "2000"
-          ANO_MAX = os.environ.get("ANO_MAX") or "2025"
+          ANO_MIN = os.environ.get("ANO_MIN") or "1950"
+          ANO_MAX = os.environ.get("ANO_MAX") or "2026"
           LANG = os.environ.get("LANG", "pt-BR")
-          FORCAR = os.environ.get("FORCAR_SUBSTITUIR", "false").lower() == "true"
 
-          POR_PAGINA = 20
-          PAGINAS = (QTD + POR_PAGINA - 1) // POR_PAGINA
+          # As 3 categorias que serão buscadas
+          CATEGORIAS = [
+              "popularity.desc",
+              "vote_average.desc",
+              "revenue.desc"
+          ]
 
-          print(f"🔍 Buscando até {QTD} filmes no TMDB (ordenar por: {ORD}, anos {ANO_MIN}-{ANO_MAX})")
+          vistos = set()
 
-          # ⭐ 1) Carrega filmes já existentes (preserva)
-          existentes = []
-          existentes_set = set()
-          if not FORCAR and os.path.exists("filmes.txt"):
-              with open("filmes.txt", "r", encoding="utf-8") as f:
-                  for linha in f:
-                      linha_s = linha.strip()
-                      if not linha_s or linha_s.startswith("#"):
+          print(f"🔍 Buscando filmes no TMDB ({ANO_MIN}-{ANO_MAX})")
+          print(f"📂 Categorias: {', '.join(CATEGORIAS)}")
+
+          for cat in CATEGORIAS:
+              print(f"\n🌐 Categoria: {cat}")
+              # O TMDB tem limite de 500 páginas (10.000 itens) por busca
+              for pag in range(1, 501):
+                  if pag % 50 == 0:
+                      print(f"  → Página {pag}/500... (Total único: {len(vistos)})")
+
+                  params = {
+                      "api_key": KEY,
+                      "language": LANG,
+                      "sort_by": cat,
+                      "include_adult": "false",
+                      "include_video": "false",
+                      "page": pag,
+                      "vote_count.gte": 50, # Filtro para não pegar filmes obscuros sem votos
+                      "primary_release_date.gte": f"{ANO_MIN}-01-01",
+                      "primary_release_date.lte": f"{ANO_MAX}-12-31",
+                  }
+
+                  try:
+                      r = requests.get("https://api.themoviedb.org/3/discover/movie",
+                                       params=params, timeout=20)
+                      if r.status_code == 429: # Rate limit
+                          print("  ⚠️ Rate limit atingido, aguardando 2s...")
+                          time.sleep(2)
+                          r = requests.get("https://api.themoviedb.org/3/discover/movie",
+                                           params=params, timeout=20)
+                      
+                      if r.status_code != 200:
+                          print(f"  ⚠️ Página {pag} retornou {r.status_code}. Fim da categoria.")
+                          break
+                  except Exception as e:
+                      print(f"  ⚠️ Erro na página {pag}: {e}")
+                      break
+
+                  data = r.json()
+                  resultados = data.get("results", [])
+                  
+                  if not resultados:
+                      print(f"  ℹ️ Fim dos resultados na página {pag}.")
+                      break
+
+                  for m in resultados:
+                      titulo = (m.get("title") or "").strip()
+                      ano = (m.get("release_date") or "")[:4]
+                      if not titulo:
                           continue
-                      existentes.append(linha_s)
-                      existentes_set.add(linha_s)
-              print(f"📂 filmes.txt já tem {len(existentes)} filmes — modo APPEND")
+                      
+                      # Formata como "Título (Ano)"
+                      linha = f"{titulo} ({ano})" if ano else titulo
+                      vistos.add(linha)
 
-              # Backup antes de mexer
-              ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-              backup = f".backup_filmes_{ts}.txt"
-              with open(backup, "w", encoding="utf-8") as f:
-                  f.write("\n".join(existentes))
-              print(f"📦 Backup salvo: {backup}")
-          elif FORCAR:
-              print("⚠️  FORÇANDO substituição — filmes.txt será zerado")
+                  # Pausa para não estourar o rate limit da API
+                  time.sleep(0.05)
 
-          # ⭐ 2) Coleta do TMDB (só os que NÃO existem ainda)
-          novos = []
-          vistos = set(existentes_set)
+          print(f"\n✅ Total de filmes únicos encontrados: {len(vistos)}")
 
-          for pag in range(1, PAGINAS + 1):
-              if pag == 1 or pag % 50 == 0:
-                  print(f"  → página {pag}/{PAGINAS}  (novos: {len(novos)}, total únicos: {len(vistos)})")
-
-              params = {
-                  "api_key": KEY,
-                  "language": LANG,
-                  "sort_by": f"{ORD}.desc",
-                  "include_adult": "false",
-                  "include_video": "false",
-                  "page": pag,
-                  "vote_count.gte": 100,
-                  "primary_release_date.gte": f"{ANO_MIN}-01-01",
-                  "primary_release_date.lte": f"{ANO_MAX}-12-31",
-              }
-              try:
-                  r = requests.get("https://api.themoviedb.org/3/discover/movie",
-                                   params=params, timeout=20)
-                  if r.status_code != 200:
-                      print(f"  ⚠️ página {pag} retornou {r.status_code}: {r.text[:100]}")
-                      break
-              except Exception as e:
-                  print(f"  ⚠️ erro na página {pag}: {e}")
-                  break
-
-              for m in r.json().get("results", []):
-                  titulo = (m.get("title") or "").strip()
-                  ano = (m.get("release_date") or "")[:4]
-                  if not titulo:
-                      continue
-                  linha = f"{titulo} ({ano})" if ano else titulo
-                  if linha in vistos:
-                      continue
-                  vistos.add(linha)
-                  novos.append(linha)
-
-                  # Se já atingiu o alvo de NOVOS, para
-                  if len(novos) >= QTD:
-                      break
-
-              if len(novos) >= QTD:
-                  break
-              time.sleep(0.26)  # respeita rate limit (4 req/s)
-
-          print(f"\n📊 Resultado da coleta:")
-          print(f"   Filmes novos encontrados: {len(novos)}")
-          print(f"   Filmes que já existiam:   {len(existentes)}")
-          print(f"   Total após merge:         {len(existentes) + len(novos)}")
-
-          # ⭐ 3) Monta o arquivo final
-          linhas_final = []
-          linhas_final.append(f"# Lista gerada/atualizada em {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
-          linhas_final.append(f"# Origem: TMDB (ordenar por: {ORD}) | Anos: {ANO_MIN}-{ANO_MAX}")
-          linhas_final.append(f"# Total: {len(existentes) + len(novos)} filmes")
-          linhas_final.append("")
-
-          # Preserva existentes na ordem original
-          if existentes:
-              linhas_final.append("# ===== FILMES MANUAIS E ANTERIORES =====")
-              linhas_final.extend(existentes)
-              linhas_final.append("")
-
-          # Adiciona novos
-          if novos:
-              linhas_final.append("# ===== ADICIONADOS VIA TMDB =====")
-              linhas_final.extend(novos)
-
+          # Salva no filmes.txt
           with open("filmes.txt", "w", encoding="utf-8") as f:
-              f.write("\n".join(linhas_final) + "\n")
+              f.write(f"# Lista gerada automaticamente via TMDB em {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+              f.write(f"# Categorias: Popularidade, Avaliação, Bilheteria | Anos: {ANO_MIN}-{ANO_MAX}\n")
+              f.write(f"# Total: {len(vistos)} filmes\n\n")
+              for titulo in sorted(vistos):
+                  f.write(titulo + "\n")
 
-          total_final = len(existentes) + len(novos)
-          print(f"\n✅ filmes.txt atualizado: {total_final} filmes")
-          if len(novos) == 0:
-              print("   ℹ️  Nenhum filme novo — lista já estava completa para esses filtros.")
+          print("💾 filmes.txt salvo com sucesso!")
           PYEOF
 
-      - name: Remover backups antigos (mantém só os 5 últimos)
-        run: |
-          ls -1t .backup_filmes_*.txt 2>/dev/null | tail -n +6 | xargs -r rm -f
-          echo "Backups restantes:"
-          ls -la .backup_filmes_*.txt 2>/dev/null || echo "  (nenhum)"
-
-      - name: Commit do filmes.txt
+      - name: Commit e push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config pull.rebase true
-
-          git add filmes.txt .backup_filmes_*.txt 2>/dev/null || git add filmes.txt
-
+          
+          git add filmes.txt
           if git diff --cached --quiet; then
-            echo "📭 Nada mudou — filmes.txt idêntico ao anterior."
+            echo "Nenhuma alteração em filmes.txt."
             exit 0
           fi
-
-          NOVOS=$(git diff --cached --numstat filmes.txt | awk '{print $1}')
-          git commit -m "chore: filmes.txt atualizado via TMDB (+${NOVOS:-?} linhas) [skip ci] run=${{ github.run_id }}"
-
-          for i in 1 2 3 4 5; do
-            echo "→ Tentativa $i de push..."
+          
+          git commit -m "chore: filmes.txt atualizado via TMDB (Top 3 Categorias) [skip ci]"
+          
+          for i in 1 2 3; do
             if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
-              echo "✅ Push OK na tentativa $i."
+              echo "✅ Push OK"
               exit 0
             fi
-            echo "⚠️  Falhou, aguardando $((i*5))s..."
-            sleep $((i*5))
+            sleep 5
           done
-          echo "❌ Push falhou após 5 tentativas."
           exit 1
