@@ -149,6 +149,7 @@ $T4R W4R$: A 4M3AÇ4 F4NT4$M4 (DUB)
 1x4
 1x5
 1x6
+1x7
 2 As Crônicas de Nárnia - Príncipe Caspian
 2. Alguns mistérios não devem ser desvendados
 2. Episódio 2
@@ -161,11 +162,18 @@ $T4R W4R$: A 4M3AÇ4 F4NT4$M4 (DUB)
 23.5, EP 6
 28 Days Later (2002)
 2x1
+2x10
+2x11
+2x12
+2x13
 2x2
 2x3
 2x4
 2x5
 2x6
+2x7
+2x8
+2x9
 3 As Crônicas de Nárnia A Viagem do Peregrino da Alvorada
 3. A violência é essencial para a mudança
 3. Episódio 3
@@ -602,6 +610,7 @@ Assassino à Preço Fixo 2 A Ressurreição 2017
 Assassino.à.Preço.Fixo.2
 Asteroid City (2023)
 Asuran (2019)
+Ataque dos titãs superxandao supercine temp 3
 Athens, Ga - Inside Out (Documentário Completo Grátis)
 Através da Minha Janela 2022 ‧ Romance/Comédia  ✟ ᴴᴰ - 𝘀𝘂𝗻𝘀𝗲𝘁 ⚡
 Através da Minha Janela 2: Além-mar 2023 ‧ Romance/Comédia ✟ ᴴᴰ - 𝘀𝘂𝗻𝘀𝗲𝘁 ⚡
@@ -791,6 +800,7 @@ Borderlands: O Destino do Universo Esta em Jogo (2024) Dublado
 Borderlands: O Destino do Universo Está em Jogo- 2024 ♡Jυυυнziинαмя
 Branca de Neve e o Caçador  2012- ♡Jυυυнziинαмя
 Branca de Neve e os Sete Anões (Disney 1937)
+Breaking bad 1x1
 Brian Torff e Manfredo Fest – Concerto Completo
 Brinquedo Assassino (2019) - Etv
 Brinquedo assassino 1988
@@ -1467,6 +1477,7 @@ Freddy vs Jason (dublado PT-BR)
 Freddy vs. Jason 2003 Dublado
 Free Guy: Assumindo o Controle (2021) @021_lulubox
 Frequently.Asked.Questions.About.Time.Travel.2009.720p.HDTV.6CH.x265.HEVC-MONOLITH.Pt
+From T1 EP 4
 Fronteira de Aço (Steel Frontier) [1995] {Dublado}
 Frozen 2 (2019) @021_lulubox
 Fruto Proibido (Jornada nas Estrelas – Ep. 37)
@@ -1549,6 +1560,11 @@ HISTÓRIA DE CLARY E JACE - Parte 7 #1Temporada
 HISTÓRIA DE ELENA E DAMON - Parte 11 #6Temporada
 HISTÓRIA DE ELENA E DAMON - Parte 6 #3Temporada
 HISTÓRIA DE ELENA E DAMON - Parte 8 #4Temporada
+HISTÓRIA DE HANNA E CALEB - Parte 1 #1Temporada
+HISTÓRIA DE HANNA E CALEB - Parte 10 #7Temporada (FINAL)
+HISTÓRIA DE HANNA E CALEB - Parte 6 #4Temporada
+HISTÓRIA DE HANNA E CALEB - Parte 7 #5Temporada
+HISTÓRIA DE HANNA E CALEB - Parte 9 #6Temporada
 HISTÓRIA DE LUNA E MATTEO - Parte 3 #1Temporada
 HISTÓRIA DE LUNA E MATTEO - Parte 9 #3Temporada (FINAL)
 HISTÓRIA DE MIA E MIGUEL - Parte 1 #1Temporada
@@ -1719,6 +1735,9 @@ ID:47640: 01x10
 ID:47640: 01x11
 ID:47640: 01x12
 ID:47640: 01x13
+ID:47640: 02x03
+ID:47640: 02x04
+ID:47640: 02x05
 ID:47640: 03x01
 ID:47640: 03x02
 ID:47640: 03x03
@@ -2696,6 +2715,9 @@ Raya e o Último Dragão 2021 ‧ Infantil/Aventura ✟ ᴴᴰ - 𝘀𝘂𝗻�
 React Classromm of the elite 4T EP 11 e 12
 React Classromm of the elite EP 9 e 10
 React Classroom of the elite T4 EP 7 e 8
+React From T1 EP 5
+React From T1 EP 6
+React From T1 EP 7
 React Fullmetal alchemist brotherhood EP 29 e 30
 React Fullmetal alchemist brotherhood EP 31 e 32
 React Fullmetal alchemist brotherhood EP 33 e 34
@@ -2705,6 +2727,7 @@ React Your lie april EP 13 e 14
 React Your lie april EP 15 e 16
 React Your lie april EP 17 e 18
 React classroom of the elite T4 EP 13 e 14
+React de From T1 EP 10
 React de Fullmetal alchemist brotherhood EP 37 e 38
 React de Fullmetal alchemist brotherhood EP 41 e 42
 React de Fullmetal alchemist brotherhood EP 45 e 46
@@ -3128,6 +3151,15 @@ Sugar Baby 2024 [ Dublado ] @invictomp
 Super (2010)
 Superbad - É Hoje (2007) • PedrØ☠️CCC
 Superbad: É Hoje (2007) @021_lulubox
+Supercine superxandao ataque on titan 1 2 3 4 5
+Supercine superxandao ataque on titan 11 e 12
+Supercine superxandao ataque on titan 14 ao 17
+Supercine superxandao ataque on titan 18 ao 22
+Supercine superxandao ataque on titan 23 ao 25
+Supercine superxandao ataque on titan 25 ao 29
+Supercine superxandao ataque on titan 32 33 34
+Supercine superxandao ataque on titan 35 36 37
+Supercine superxandao ataque on titan 6 7 8 9
 Suzume (2022) Dublado
 T H 0 R: 4M0R E TR0V4O (D U B)
 T H 0 R: R4GN4R0K (DUB)
@@ -3325,6 +3357,10 @@ Teen Wolf_ O Filme 2023 . TERROR/AÇÃO
 Teerã' (2025)
 Tempo de loucura (Jornada nas Estrelas – Ep. 33)
 Temporada 2 Ep. 1 - Uma Nova Ordem Mundial: Qual Seria a Nova Otan?
+Terminator 3 Rebelião das Máquinas (2003) Dublado
+Terminator 4 a salvação (2009) dublado
+Terminator 5 genesis (2015) dublado
+Terminator 6 destino sombrio (2019) dublado
 Terno de um milhao de dolares
 Terra de Pistoleiros' (2025)
 Terremoto: A Falha de San Andreas [ Dublado ] @invictomp
@@ -3747,6 +3783,7 @@ sintonia temporada 5 ep 3
 sintonia temporada 5 ep 4
 sintonia temporada 5 ep 5
 sintonia temporada 5 ep 6
+terminator 1 ( 1984) dublado
 thi.ng stream #2 (2020-07-27)
 um classico filme de terror vulgo eachoco
 um lugar silencioso 2018 - DUBLADO (duszio__)
