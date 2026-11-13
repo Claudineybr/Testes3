@@ -408,6 +408,7 @@ A Pior Pessoa do Mundo.     ~TiagoRave"
 A Primeira Noite de Crime (2018) @021_lulubox
 A Primeira Profecia (2024) • PedrØ☠️CCC
 A Princesa (2022) @021_lulubox
+A Princesa Xuxa & Os Trapalhões Volume 6(Vinhetas Globo Play De Globo Video) De Xuxa & Os Trapalhões De A Princesa Xuxa E Os Trapalhões Volume 6
 A Princesa e o Sapo
 A Profecia Do Mal (2023) • PedrØ☠️CCC
 A Q U 4 M A N (DUB)
@@ -479,6 +480,10 @@ ATÉ ONDE ELE VAI - EPISÓDIO 6 (O que eu nunca ia ter)
 ATÉ ONDE ELE VAI - EPISÓDIO 7 (Isso aqui é poder)
 ATÉ ONDE ELE VAI - EPISÓDIO 8 (Chegou sua vez)
 ATÉ ONDE ELE VAI - EPISÓDIO 9 (Me tira daquele lugar)
+AULA 02 - [Imersão Dev Agentes de IA] Masterclass Python com Gui Lima
+AULA 03 - [Imersão Dev Agentes de IA] Classificação de intenções com IA
+AULA 04 - [Imersão Dev Agentes de IA] Construindo a base de conhecimento com RAG
+AULA 05 - [Imersão Dev Agentes de IA] Orquestração do agente com LangGraph
 AVENTURA/ANIMAÇÃO ! O Menino e a Garça 2023
 AVENTURA/AÇÃO : As Crônicas de Nárnia_ A Viagem do Peregrino da Alvorada .
 Abigail (2024) - LadyRave
@@ -625,6 +630,7 @@ Assassino à Preço Fixo 2 A Ressurreição 2017
 Assassino.à.Preço.Fixo.2
 Asteroid City (2023)
 Asuran (2019)
+Ataque Brutal 2026 dublado
 Ataque dos titãs superxandao supercine temp 3
 Athens, Ga - Inside Out (Documentário Completo Grátis)
 Atlantics (2019) Atlantique
@@ -867,6 +873,8 @@ Caché (2005)
 Cactus – Live and Proud
 Cadáver (2018) @021_lulubox
 Café de Flore (2011)
+Camp Rock
+Camp Rock 2
 Campo do Medo (2019) - LadyRave
 Capitã Marvel (2019) @021_lulubox
 Capitão América 2: O Soldado Invernal (2014) @021_lulubox
@@ -1011,6 +1019,7 @@ Cloverfield - Monstro - By 𝕰𝖉𝖜𝖆𝖗𝖉
 ClubbinTV Dj Quick (Documentário Completo Grátis)
 ClubbinTV Ice Cube (Documentário Completo Grátis)
 Com Amor, Van Gogh 2017- ♡Jυυυнziинαмя
+Como Criar o Garoto Perfeito
 Como Defender um Assassino - T1 E1
 Como Defender um Assassino - T1 E10
 Como Defender um Assassino - T1 E11
@@ -1248,6 +1257,7 @@ Doze É Demais 2
 Drake - Sucesso (Documentário Completo Grátis)
 Dreams (1990)
 Drive My Car (2021)
+Drácula(1931)
 DuckTales - O Tesouro da Lâmpada Perdida (Disney 1990)
 DuckTales - O Tesouro dos Sóis Dourados (Disney 1987)
 Duna Parte 2 2024
@@ -1476,6 +1486,7 @@ Existe outro planeta habitável para nós? - EPISÓDIO COMPLETO: O UNIVERSO => M
 Exit 8 (2025) ８番出口
 Exorcismo Sagrado 2021 ‧ Terror/Drama ✟ ᴴᴰ - 𝘀𝘂𝗻𝘀𝗲𝘁 ⚡
 Extermínio 2
+Extraterrestrial
 F Marry Kill - Jogo Perigoso 2024 ‧ 1h 37m
 FEIOS (2024) Ficção Científica, Drama
 FEIOS 2024- ♡Jυυυнziинαмя
@@ -1631,6 +1642,9 @@ HISTÓRIA DE HANNA E CALEB - Parte 10 #7Temporada (FINAL)
 HISTÓRIA DE HANNA E CALEB - Parte 6 #4Temporada
 HISTÓRIA DE HANNA E CALEB - Parte 7 #5Temporada
 HISTÓRIA DE HANNA E CALEB - Parte 9 #6Temporada
+HISTÓRIA DE JACKIE E COLE - Parte 1 #1Temporada
+HISTÓRIA DE JACKIE E COLE - Parte 2 #1Temporada
+HISTÓRIA DE JACKIE E COLE - Parte 4 #2Temporada
 HISTÓRIA DE JADE E COBRA - Parte 1
 HISTÓRIA DE LUNA E MATTEO - Parte 3 #1Temporada
 HISTÓRIA DE LUNA E MATTEO - Parte 9 #3Temporada (FINAL)
@@ -1919,8 +1933,10 @@ Irmão Urso (2003)
 It - A Coisa 2017 ‧ Terror/Mistério ✟ ᴴᴰ - 𝘀𝘂𝗻𝘀𝗲𝘁 ⚡
 It – Capítulo Dois 2019 ‧ Terror/Mistério ✟ ᴴᴰ - 𝘀𝘂𝗻𝘀𝗲𝘁 ⚡
 It's Such a Beautiful Day (2012)
+It-Uma Obra-Prima do Medo(1990)-Dublado
 It: A Coisa (2017) @021_lulubox
 It: Capítulo Dois (2019) @021_lulubox
+It:Capítulo 2(2019)
 J0l4$ BRUT4$ (D U B)
 JADE (1995) Suspense, Erótico
 JU$TlC3lR0 UM4 ULTlM4 M0RT3 (DUB)
@@ -2333,6 +2349,7 @@ Noite do Terror (dublado PT-BR)
 Nosferatu (2024)-
 Nosferatu (2025) • Sobrenatural/Terror • Cine𝑪𝒐𝒗𝒊𝒍 ☠️CCC
 Nosferatu 2024 [Silenc3rz]
+Nosferatu(1922)-Legendado
 Nouvelle Vague (2025)
 Noé (2014)
 Nuovo.Olimpo.2023.mp4
@@ -2353,6 +2370,8 @@ O Assassino do Calendari0
 O Auto da Compadecida (2000)
 O BOM AMIGO GIGANTE
 O Cavaleiro Solitario [ Dublado ] @invictomp
+O Clube Das Winx Especial(Winx Club Special)?? ♀️?? ♀️?? ♀️?? ♀️?? ♀️?? ♀️.mp4
+O Clube Das Winx(Winx Club)?? ♀️?? ♀️?? ♀️?? ♀️?? ♀️?? ♀️.mp4
 O Clube do Crime das Quintas-Feiras' (2025)
 O Combinado Não Sai Caro' (2025)
 O Comprador de Armas aka O Matador (The Gunrunner) [1989] {Dublado}
@@ -2400,6 +2419,7 @@ O Filho de Chucky (2004) @021_lulubox
 O Filho de Deus
 O Filho do Batman (2014) parte 3
 O Foragido (Wrongfully Accused) [1998] {Dublado}
+O Gabinete do Dr.Caligari(1920)-Legendado
 O Grande Desafio  1999
 O Gênio Maluco - 1969 (DUBLADO) Compilação
 O H0M3M D3 AÇ0 (DUB)
@@ -2415,6 +2435,7 @@ O Mal que Nos Habita (dublado PT-BR)
 O Mapa que Leva Até Você 2025 ‧ Romance/Drama ‧ 1h 38m
 O Menino e a Garça 2023 ‧ Fantasia/Aventura ✟ ᴴᴰ - 𝘀𝘂𝗻𝘀𝗲𝘁 ⚡
 O Mesmo Dia com Você' (2025)
+O Mistério De Robin Hood Volume 8(Vinhetas Globo Play De Globo Video) De Xuxa De Os Trapalhões Em O Mistério De Robin Hood Volume 8
 O Mito 2005
 O Monge a Prova de Balas [ Dublado ] @invictoMP
 O Monstro Que Vive Em Mim (2023) - LadyRave
@@ -2497,6 +2518,7 @@ O.Palhaço.No.Milharal.2025.mp4
 O.Segredo.De.Marrowbone.2018.720P.Bluray.X264-Dublado.Www.Comandotorrents.Com(1)
 OS 10 MANDAMENTOS
 OS WALTONS - O ESCRITOR
+Oblivion  dublado  2013
 Observador (2022) - LadyRave
 Obsessão aka Sem Amanhã (Fresh Horses) [1988] {Dublado}
 Oceanos - 2009
@@ -2648,7 +2670,11 @@ PRISON BREAK - 1° TEMPORADA - EPISÓDIO 8
 PRISON BREAK - 1° TEMPORADA - EPISÓDIO 9
 Padre 2011 ‧ Terror/Ação ✟ ᴴᴰ - 𝘀𝘂𝗻𝘀𝗲𝘁 ⚡
 Pague para Entrar, Reze para Sair (dublado PT-BR)
+Paixões Ardentes - S01 E01 (ESP)
+Paixões Ardentes - S01 E02 (ESP)
 Paixões Ardentes - S01 E03 (ESP)
+Paixões Ardentes - S01 E05 (ESP)
+Paixões Ardentes - S01 E06 (ESP)
 Palestine 36 (2025)
 Palestine 36 (2025) (unofficial; stitched up)
 Panico Na Floresta 2 [ Dublado ] @invictomp
@@ -2680,6 +2706,7 @@ Peaky blidears Season 5 EP 3
 Pee Mak 1 Pee Mak Phrakanong 1 2013
 Pee.Mak.Phrakanong.2013.1080p.BluRay
 Peixonáuticos(Brinque Clipe, Clipe Musical, DJ Pop, Enigmas Do Chumbo, Fala Aí Bicho, Natureza Legal, Piadaria Do Zico).mp4
+Peixounáticos De Piadaria De Zico Completo Episódios Completos????Ep 6 Completo.mp4
 Penetras Bons de Bico
 Penguin Highway (2018, JP) VOSTA
 Pequenos Guerreiros 720p (1998)
@@ -2771,6 +2798,7 @@ Pânico 5
 Pânico 5 (2022) @021_lulubox
 Pânico 5 (2022) • PedrØ☠️CCC
 Pânico 6 (2023) @021_lulubox
+Pânico 7 dublado 2026
 Pânico VI (2023) • PedrØ☠️CCC
 Pânico na Floresta 2 2007 ‧ Terror/Suspense ✟ ᴴᴰ - 𝘀𝘂𝗻𝘀𝗲𝘁 ⚡
 Pânico na Floresta 2003 (DUBLADO) @oSaint
@@ -3506,6 +3534,8 @@ Ted (2012) @021_lulubox
 Ted 2 (2015) @021_lulubox
 Ted 2012  Comédia
 Tee Yai Nascido para o Mal' (2025)
+Teen Beach 2
+Teen Beach Movie
 Teen Wolf - 1° Temporada - Episódio 1
 Teen Wolf - 1° Temporada - Episódio 2
 Teen Wolf - 1° Temporada - Episódio 3
@@ -3530,6 +3560,7 @@ Terrifier 2 (2022) @021_lulubox
 Terrifier 2 (dublado PT-BR)
 Terror No Deserto 2023 @malusannsts
 Terror em Silent Hill (2006) Dublado
+Terror em Silent Hill: Regresso para o Inferno (2026) áudio original.
 Terror na Estrada 2015 ‧ Terror/Suspense ✟ ᴴᴰ - 𝘀𝘂𝗻𝘀𝗲𝘁 ⚡
 Terror no Deserto 2023 - Ação • Terror • Ficção científica ✟ ᴴᴰ - 𝘀𝘂𝗻𝘀𝗲𝘁 ⚡
 Terrorizing Dissent (2008)
@@ -3590,6 +3621,11 @@ The Walking Dead - 1° Temporada - Episódio 3
 The Walking Dead - 1° Temporada - Episódio 4
 The Walking Dead - 1° Temporada - Episódio 5
 The Walking Dead - 1° Temporada - Episódio 6
+The Walking Dead S6E3 - DUBLADO
+The Walking Dead S6E4 - DUBLADO
+The Walking Dead S6E5 - DUBLADO
+The Walking Dead S6E6 - DUBLADO
+The Walking Dead S6E7 - DUBLADO
 The Walking Dead: S1 E1
 The Walking Dead: S1 E2
 The Walking Dead: S1 E3
@@ -3774,6 +3810,7 @@ VOD 31/07/2026 SUPER XANDÃO SUPERCINE OS VINGADORES 4 (ULTIMATO)
 VOD SUPER XANDÃO SUPERCINE REACHER TEMP 4,  EP1 E EP2
 Valente 2012
 Vampire.Hunter.D.Bloodlust.2000.1080p.BDRip.Dual.Audio.AAC5.1.10bits.x265-Rapta
+Velocidade Máxima 1994 dublado
 Velozes & Furiosos (2001) @021_lulubox
 Velozes & Furiosos 2 (2003) @021_lulubox
 Velozes & Furiosos 3: Desafio em Tóquio (2006) @021_lulubox
@@ -3881,6 +3918,13 @@ Wonka (2023)
 X-Men - O Filme 2000 ‧ Ação/Ficção científica ✟ ᴴᴰ - 𝘀𝘂𝗻𝘀𝗲𝘁 ⚡
 X-Men Origens.Wolverine.2009.720p.BluRay.5.1,x264.DUAL-WWW.BLUDV.COM
 X-Men.O.Confronto.Final.2006.720p.BluRay.5.1.x264.DUAL-WWW.BLUDV.COM
+Xuxa Em Gaúcho Negro Volume 9(Vinhetas Globo Play De Globo Video) De Xuxa Em Gaúcho Negro Volume 9
+Xuxa Em O Mistério De Feiurinha Volume 20
+Xuxa Em Os Duendes 2 No Caminho Das Fadas Volume 14(Vinhetas Globo Play De Globo Video)De Xuxa Em Os Duendes 2 No Caminho Das Fadas Volume 14
+Xuxa Em Popstar Volume 12
+Xuxa Em Sonho De Menina Volume 19
+Xuxa Em Uma Fada Veio Me Visitar Volume 21
+Xuxinha Em Guto Contra Os Monstros Do Espaço Volume 17
 Y0K4l W4TCH: 0 FlLM3 (DUB)
 Yintah (2024)
 Your lie April EP 9 e 10
