@@ -1,4 +1,4 @@
-name: Gerar filmes.txt via TMDB (Máximo)
+name: Gerar filmes.txt via TMDB (Preservando Tudo)
 
 on:
   workflow_dispatch:
@@ -26,7 +26,7 @@ concurrency:
 jobs:
   gerar:
     runs-on: ubuntu-latest
-    timeout-minutes: 120 # Aumentei o timeout por segurança
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +39,7 @@ jobs:
       - name: Instalar dependências
         run: pip install requests
 
-      - name: Gerar lista via TMDB (3 categorias - Máximo)
+      - name: Gerar lista via TMDB (Máximo + Append)
         env:
           TMDB_KEY: ${{ secrets.TMDB_API_KEY }}
           ANO_MIN: ${{ inputs.ano_min || '1900' }}
@@ -66,23 +66,20 @@ jobs:
           ANO_MAX = os.environ.get("ANO_MAX") or "2026"
           LANG = "pt-BR"
 
-          # As 3 categorias que serão buscadas
           CATEGORIAS = [
-              "popularity.desc",  # Mais populares
-              "vote_average.desc", # Mais bem avaliados
-              "revenue.desc"       # Maior bilheteria
+              "popularity.desc",  
+              "vote_average.desc", 
+              "revenue.desc"       
           ]
 
           vistos = set()
 
           print(f"🔍 Buscando o MÁXIMO de filmes no TMDB ({ANO_MIN}-{ANO_MAX})")
           print(f"📂 Categorias: {', '.join(CATEGORIAS)}")
-          print(f"⏱️ Isso pode demorar alguns minutos...")
 
           for cat in CATEGORIAS:
               print(f"\n🌐 Categoria: {cat}")
               
-              # Limite máximo do TMDB: 500 páginas (10.000 filmes por categoria)
               for pag in range(1, 501):
                   if pag % 50 == 0:
                       print(f"  → Página {pag}/500... (Total único: {len(vistos)})")
@@ -94,7 +91,7 @@ jobs:
                       "include_adult": "false",
                       "include_video": "false",
                       "page": pag,
-                      "vote_count.gte": 10, # Filtro baixo para pegar filmes de nicho também
+                      "vote_count.gte": 10, 
                       "primary_release_date.gte": f"{ANO_MIN}-01-01",
                       "primary_release_date.lte": f"{ANO_MAX}-12-31",
                   }
@@ -102,7 +99,7 @@ jobs:
                   try:
                       r = requests.get("https://api.themoviedb.org/3/discover/movie",
                                        params=params, timeout=30)
-                      if r.status_code == 429: # Rate limit
+                      if r.status_code == 429:
                           print("  ⚠️ Rate limit atingido, aguardando 2s...")
                           time.sleep(2)
                           r = requests.get("https://api.themoviedb.org/3/discover/movie",
@@ -119,42 +116,51 @@ jobs:
                   resultados = data.get("results", [])
                   
                   if not resultados:
-                      print(f"  ℹ️ Fim dos resultados na página {pag}.")
                       break
 
                   for m in resultados:
                       titulo = (m.get("title") or "").strip()
                       ano = (m.get("release_date") or "")[:4]
-                      if not titulo:
-                          continue
+                      if not titulo: continue
                       
-                      # Formata como "Título (Ano)"
                       linha = f"{titulo} ({ano})" if ano else titulo
                       vistos.add(linha)
 
-                  # Pausa para não estourar o rate limit da API
                   time.sleep(0.05)
 
-          print(f"\n✅ Total de filmes únicos encontrados: {len(vistos)}")
+          print(f"\n✅ Filmes retornados pelo TMDB nesta rodada: {len(vistos)}")
 
-          # Salva no filmes.txt (adicionando ao que já existe)
+          # ⭐ AQUI ESTÁ A PRESERVAÇÃO ABSOLUTA
           existentes = set()
           if os.path.exists("filmes.txt"):
               with open("filmes.txt", "r", encoding="utf-8") as f:
                   for l in f:
                       l = l.strip()
+                      # Ignora cabeçalhos (linhas com #) e linhas vazias
                       if l and not l.startswith("#"):
                           existentes.add(l)
 
-          novos = vistos - existentes
+          # Filtra apenas os filmes que NÃO estão no arquivo
+          novos_titulos = []
+          for t in vistos:
+              if t not in existentes:
+                  novos_titulos.append(t)
 
-          with open("filmes.txt", "w", encoding="utf-8") as f:
-              f.write(f"# Lista atualizada em {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
-              f.write(f"# Total: {len(vistos)} filmes (novos hoje: {len(novos)})\n\n")
-              for titulo in sorted(vistos):
-                  f.write(titulo + "\n")
+          print(f"📂 Já existiam no arquivo: {len(existentes)}")
+          print(f"➕ Novos filmes a serem adicionados: {len(novos_titulos)}")
 
-          print(f"💾 filmes.txt salvo com {len(vistos)} filmes ({len(novos)} novos adicionados hoje).")
+          if novos_titulos:
+              # Abre o arquivo em modo 'a' (append) - Só adiciona no final, nunca apaga
+              with open("filmes.txt", "a", encoding="utf-8") as f:
+                  # Se o arquivo acabou de ser criado (estava vazio), coloca um cabeçalho
+                  if len(existentes) == 0:
+                      f.write(f"# Lista gerada via TMDB em {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
+                  
+                  for t in novos_titulos:
+                      f.write(t + "\n")
+              print(f"💾 {len(novos_titulos)} filmes adicionados ao final do filmes.txt!")
+          else:
+              print("💤 Nenhum filme novo encontrado. O arquivo não foi alterado.")
           PYEOF
 
       - name: Commit e push
@@ -167,11 +173,11 @@ jobs:
           
           git add filmes.txt
           if git diff --cached --quiet; then
-            echo "Nenhuma alteração em filmes.txt (nenhum filme novo)."
+            echo "Nenhuma alteração em filmes.txt."
             exit 0
           fi
           
-          git commit -m "chore: filmes.txt atualizado via TMDB (Catálogo Máximo) [skip ci]"
+          git commit -m "chore: filmes.txt atualizado via TMDB (Append) [skip ci]"
           
           for i in 1 2 3; do
             if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
