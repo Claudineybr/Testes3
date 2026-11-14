@@ -478,7 +478,7 @@ jobs:
                                   f"[fila: {total_proc + i - 1}/{total_geral}]")
                   print(f"\n[{i}/{len(lote)}] {filme}  (fila: {total_proc + i}/{total_geral})")
 
-                  a = buscar_tankietube(filme, "output", encontrados)
+                  a = buscar_tankietube(filme, "tankie", encontrados) # ⭐ PASTA TANKIE
                   print(f"      → Total: {a}")
 
                   estado["pendentes"].remove(filme)
@@ -523,13 +523,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config pull.rebase true
           
-          # ⭐ Correção do erro "Terminal is dumb"
           export GIT_EDITOR=true
           git config --global core.editor "true"
           
-          mkdir -p output
+          mkdir -p tankie
           touch titulos_encontrados.txt fila_estado.json
-          git add output/ titulos_encontrados.txt fila_estado.json
+          git add tankie/ titulos_encontrados.txt fila_estado.json # ⭐ ADD TANKIE
           if git diff --cached --quiet; then
             echo "Nenhuma alteração."; exit 0
           fi
@@ -545,7 +544,6 @@ jobs:
               fi
             else
               echo "⚠️ Conflito detectado! Resolvendo automaticamente..."
-              # ⭐ RESOLUÇÃO DE CONFLITO AUTOMÁTICA
               python - <<'EOF'
           import json, os
 
