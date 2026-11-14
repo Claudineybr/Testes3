@@ -1,4 +1,4 @@
-name: Buscar Filmes — Tokyvideo Coleções (Fila Persistente)
+name: Buscar Filmes — Tokyvideo Coleções (Auto-Run)
 
 on:
   workflow_dispatch:
@@ -235,9 +235,6 @@ jobs:
 
                   while videos_gerados < LIMITE:
                       
-                      # ========================================================
-                      # FASE 1: SE A FILA ESTIVER VAZIA, BUSCA MAIS LINKS
-                      # ========================================================
                       if not fila_links:
                           if pagina_colecao > 37:
                               print("\n🏁 Fim das 37 páginas. Nada mais a coletar.")
@@ -266,7 +263,6 @@ jobs:
                               
                               print(f"  → {len(colecoes)} coleções encontradas, {len(colecoes_novas)} novas")
 
-                              # Visita TODAS as coleções novas para pegar os links
                               for colecao in colecoes_novas:
                                   try:
                                       print(f"    🔍 Entrando: {colecao.split('/')[-1][:40]}")
@@ -305,13 +301,10 @@ jobs:
                               salvar_estado(estado)
                               continue
 
-                      # ========================================================
-                      # FASE 2: PROCESSA OS LINKS DA FILA
-                      # ========================================================
                       print(f"\n🎞️  Processando fila... ({len(fila_links)} links restantes)")
                       
                       while fila_links and videos_gerados < LIMITE:
-                          href = fila_links[0] # Pega o primeiro sem remover ainda
+                          href = fila_links[0]
                           
                           page_v = context.new_page()
                           duracao_rede = {"valor": 0}
@@ -370,7 +363,7 @@ jobs:
                                   og = soup_v.find("meta", property="og:image")
                                   if og: thumb = og.get("content", "")
 
-                                  gerar_html(titulo, thumb, href, "output")
+                                  gerar_html(titulo, thumb, href, "tokyvideo") # ⭐ PASTA TOKYVIDEO
                                   encontrados.add(titulo)
                                   processados.add(href)
                                   if href in falhas: del falhas[href]
@@ -383,7 +376,6 @@ jobs:
                           finally:
                               page_v.close()
                               
-                              # Remove da fila e salva o progresso
                               fila_links.pop(0)
                               estado["fila_links"] = fila_links
                               estado["processados"] = list(processados)
@@ -439,10 +431,9 @@ jobs:
           export GIT_EDITOR=true
           git config --global core.editor "true"
           
-          mkdir -p output
+          mkdir -p tokyvideo
           touch tokyvideo_estado.json titulos_encontrados.txt
-          git add output/ tokyvideo_estado.json titulos_encontrados.txt
-
+          git add tokyvideo/ tokyvideo_estado.json titulos_encontrados.txt # ⭐ ADD TOKYVIDEO
           if git diff --cached --quiet; then
             echo "Nenhuma alteração."
             exit 0
