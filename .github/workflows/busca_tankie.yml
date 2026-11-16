@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       filmes:
-        description: 'Lista avulsa separada por vírgula (adiciona à fila)'
+        description: 'Lista avulsa separada por vírgula (entra na frente da fila)'
         required: false
         default: ''
       lote:
@@ -13,7 +13,7 @@ on:
         default: 200
         required: false
       resetar:
-        description: '⚠️ Zerar a fila'
+        description: '⚠️ Zerar a fila (recomeça do primeiro filme)'
         type: boolean
         default: false
       auto_run:
@@ -42,467 +42,454 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Instalar dependências
-        run: pip install requests beautifulsoup4
+        run: pip install requests
 
-      - name: Criar script de busca
+      - name: Criar script
         run: |
           cat << 'PYEOF' > busca.py
-          import os, re, json, time, sys, unicodedata, requests
+          import os, re, sys, json, time, hashlib, unicodedata, requests
+          from concurrent.futures import ThreadPoolExecutor
           from datetime import datetime, timezone
           from difflib import SequenceMatcher
-          from html import escape as html_escape
+          from html import escape as esc
+          from requests.adapters import HTTPAdapter
+          from urllib3.util.retry import Retry
 
           try:
               sys.stdout.reconfigure(line_buffering=True)
-              sys.stderr.reconfigure(line_buffering=True)
           except Exception:
               pass
 
           _orig_print = print
           def print(*args, **kwargs):
               kwargs.setdefault("flush", True)
-              ts = datetime.now().strftime("%H:%M:%S")
-              _orig_print(f"[{ts}]", *args, **kwargs)
+              _orig_print(f"[{datetime.now().strftime('%H:%M:%S')}]", *args, **kwargs)
 
-          MIN_DURACAO    = 40 * 60
-          ARQ_ESTADO     = "fila_estado.json"
-          ARQ_TITULOS    = "titulos_encontrados.txt"
-          ARQ_FILMES_TXT = "filmes.txt"
-          INICIO         = time.time()
-          LIMITE_SEG     = 5 * 3600
+          # ───────────── configuração ─────────────
+          BASE         = "https://tankie.tube"
+          OUTDIR       = "tankie"
+          ARQ_ESTADO   = "fila_estado.json"
+          ARQ_TITULOS  = "titulos_encontrados.txt"
+          ARQ_FILMES   = "filmes.txt"
+          MIN_DURACAO  = 40 * 60
+          LIMITE_SEG   = 5 * 3600
+          THREADS      = 4
+          MAX_TENT     = 3          # tentativas por filme quando a API falha
+          MAX_FALHAS_SEGUIDAS = 12  # aborta a run se o site cair
 
-          LOTE          = max(1, min(500, int(os.environ.get("LOTE", "200") or "200")))
-          RESETAR       = os.environ.get("RESETAR", "").lower() == "true"
-          ESTRITO_PTBR  = os.environ.get("ESTRITO_PTBR", "false").lower() == "true"
+          INICIO       = time.time()
+          LOTE         = max(1, min(500, int(os.environ.get("LOTE") or 200)))
+          RESETAR      = os.environ.get("RESETAR", "").lower() == "true"
+          ESTRITO_PTBR = os.environ.get("ESTRITO_PTBR", "").lower() == "true"
 
-          PT_BR_MARKERS = ["dublado","dublagem","dublada","dublados","pt-br","ptbr","pt br","pt/br","portugues","portugues-br","[pt]","dual audio"]
-          EN_SUB_MARKERS = ["legendado","legendada","legendados","leg.","[leg]","(leg)","sub ","[sub]","(sub)","subtitled","eng sub","eng subs","english","[en]","(en)","ingles","original"," ov","ov)"]
+          # ───────────── heurísticas de idioma / relevância ─────────────
+          RE_PT = re.compile(r"\b(dublad[oa]s?|dublagem|pt[-\s/]?br|portugues(?:[-\s]br)?|dual[-\s]audio)\b|\[pt\]")
+          RE_EN = re.compile(r"\b(legendad[oa]s?|leg|sub|subs|subtitled|eng[-\s]subs?|english|ingles|original|ov)\b"
+                             r"|\[en\]|\(en\)|\[leg\]|\(leg\)|\[sub\]|\(sub\)")
+          RUIDO = re.compile(r"\b(filme|completo|dublad[oa]s?|legendad[oa]s?|hd|full|fullhd|4k|1080p|720p|480p|"
+                             r"bluray|brrip|webrip|dvdrip|dual audio|pt[-\s/]?br|portugues|nacional|assistir|"
+                             r"online|gratis|oficial|original)\b|[\[\(][^\]\)]*[\]\)]")
 
-          PT_INDICATORS = {
-              "o","a","os","as","um","uma","de","do","da","dos","das",
-              "ao","aos","na","nas","no","nos","em","e","ou",
-              "que","por","para","com","se","mas","nao","sua","seu",
-              "suas","seus","esta","este","isso","esse","essa","sao",
-              "foi","era","tem","vai","sobre","entre","depois","antes",
-              "agora","sempre","nunca","muito","pouco","mais","menos",
-              "acao","aventura","comedia","drama","terror","suspense",
-              "ficcao","cientifica","animacao","infantil","romance",
-              "documentario","musical","guerra","crime","misterio",
-              "fantasia","policial","epico","biografico",
-              "origem","retorno","vinganca","destino","poder","forca",
-              "luta","jogo","jogos","cidade","familia","amigo","inimigo",
-              "senhor","aneis","rei","rainha","principe","princesa",
-              "guerreiro","guerreiros","heroi","herois","vilao","viloes",
-              "soldado","capitao","doutor","homem","mulher","menino",
-              "menina","crianca","mundo","vida","amor","morte","tempo",
-              "noite","dia","estrada","caminho","viagem","sonho",
-              "medo","odio","justica","policia","assassino","estrela",
-              "lua","sol","oceano","mar","ilha","montanha","floresta",
-              "pais","nacao","imperio","reino","trono","espada",
-              "magia","bruxa","vampiro","zumbi","robo","passado",
-              "presente","futuro","final","inicio","parte","filme",
-              "aguas","fogo","terra","ceu","inferno","paraiso",
-              "anjo","demonio","fantasma","monstro","vila","inocentes",
-              "silencio","clube","trevas","sombra","estrelas",
-              "galaxia","guarda","guardoes","piratas","caribe","volta",
-              "cavaleiro","pedra","filosofal","camara","secreta",
-              "prisioneiro","azkaban","calice","ordem","fenix",
-              "enigma","reliquias","ultimato","infinita","era","ultron",
-              "aranha","formiga","vespa","pantera","negra","marvel",
-              "estranho","guardioes","thor","hulk","viuva","eterno",
-              "eternos","shang","chi","lenda","torres","sociedade",
-              "duas","vingadores","duna","matrix","avatar","interestelar",
-              "django","golpe","mentira","verdade","capita",
-          }
+          PT_WORDS = set("""o a os as um uma de do da dos das ao aos na nas no nos em e ou que por para com se mas nao sua seu
+          suas seus esta este isso esse essa sao foi era tem vai sobre entre depois antes agora sempre nunca muito pouco mais menos
+          acao aventura comedia drama terror suspense ficcao cientifica animacao infantil romance documentario musical guerra crime
+          misterio fantasia policial epico biografico origem retorno vinganca destino poder forca luta jogo jogos cidade familia amigo
+          inimigo senhor aneis rei rainha principe princesa guerreiro guerreiros heroi herois vilao viloes soldado capitao doutor homem
+          mulher menino menina crianca mundo vida amor morte tempo noite dia estrada caminho viagem sonho medo odio justica policia
+          assassino estrela lua sol oceano mar ilha montanha floresta pais nacao imperio reino trono espada magia bruxa vampiro zumbi
+          robo passado presente futuro final inicio parte filme aguas fogo terra ceu inferno paraiso anjo demonio fantasma monstro vila
+          inocentes silencio clube trevas sombra estrelas galaxia guarda guardoes piratas caribe volta cavaleiro pedra filosofal camara
+          secreta prisioneiro azkaban calice ordem fenix enigma reliquias ultimato infinita ultron aranha formiga vespa pantera negra
+          estranho guardioes viuva eterno eternos lenda torres sociedade duas vingadores duna interestelar mentira verdade""".split())
 
-          EN_COMMON = {
-              "the","of","and","to","in","is","it","you","that","he",
-              "was","for","on","are","with","as","his","they","at","be",
-              "this","have","from","or","one","had","by","but","not",
-              "what","all","were","we","when","your","can","said","there",
-              "use","an","each","which","she","do","how","their","if",
-              "will","up","other","about","out","many","then","them",
-              "these","so","some","her","would","make","like","him","into",
-              "time","has","look","two","more","write","go","see","number",
-              "no","way","could","people","my","than","first","water","been",
-              "call","who","oil","its","now","find","long","down","day",
-              "did","get","come","made","may","part","back","after","only",
-              "old","new","over","also","just","know","take","night",
-              "love","life","war","world","man","woman","boy","girl",
-          }
+          EN_WORDS = set("""the of and to in is it you that he was for on are with as his they at be this have from or one had by but
+          not what all were we when your can said there use an each which she do how their if will up other about out many then them
+          these so some her would make like him into time has look two more write go see number no way could people my than first
+          water been call who oil its now find long down day did get come made may part back after only old new over also just know
+          take night love life war world man woman boy girl""".split())
 
-          BLACKLIST = [
-              "aula ", "playlist", "gameplay", "walkthrough", "tutorial",
-              "unboxing", "podcast", "entrevista", "interview", "trailer",
-              "teaser", "audiobook", "audiolivro", "audio livro", "concerto",
-              "show completo", "ao vivo em", "cd completo", "dvd completo",
-              "compilação", "compilation", "episódio", "episode ", "temporada ",
-              "season ", "matchday", "top 5 gol", "top 10 gol", "gols |", "| gols",
-              "hurricane", "notícias ao vivo", "live: ", "let's play", "lets play",
-              "documentário", "documentario", "documental", "vinheta",
-              "globoplay", "globo video", "review", "reaction", "making of",
-              "behind the scenes", "top 10", "top 5 ", "resumo", "resenha",
-              "opinião", "opiniao", "meditantes", "meditação",
-              "fosdem", "conference", "conferencia", "keynote",
-              "palestra", "webinar", "coding", "programming", "developer",
-              "livestream", "playthrough", "play-through",
-          ]
-
-          STOPWORDS = {
-              "o","a","os","as","de","da","do","das","dos","e","em","um","uma",
-              "para","por","com","ao","à","no","na","nos","nas",
-              "the","an","of","in","on","at","to","for","with",
-              "parte","part","vol","volume",
-          }
+          STOPWORDS = set("""o a os as de da do das dos e em um uma para por com ao à no na nos nas the an of in on at to for with
+          parte part vol volume""".split())
 
           NUMEROS = {
-              "1": ["um","one","primeiro","first"],
-              "2": ["dois","duas","two","segundo","second"],
-              "3": ["tres","three","terceiro","third"],
-              "4": ["quatro","four","quarto","fourth"],
-              "5": ["cinco","five","quinto","fifth"],
-              "6": ["seis","six","sexto","sixth"],
-              "7": ["sete","seven","setimo","seventh"],
-              "8": ["oito","eight","oitavo","eighth"],
-              "9": ["nove","nine","nono","ninth"],
-              "10": ["dez","ten","decimo","tenth"],
+              "1": ["um", "one", "primeiro", "first"], "2": ["dois", "duas", "two", "segundo", "second"],
+              "3": ["tres", "three", "terceiro", "third"], "4": ["quatro", "four", "quarto", "fourth"],
+              "5": ["cinco", "five", "quinto", "fifth"], "6": ["seis", "six", "sexto", "sixth"],
+              "7": ["sete", "seven", "setimo", "seventh"], "8": ["oito", "eight", "oitavo", "eighth"],
+              "9": ["nove", "nine", "nono", "ninth"], "10": ["dez", "ten", "decimo", "tenth"],
           }
 
-          ALIASES = {
-              "vingadores":["avengers"],"poderoso":["godfather"],
-              "chefao":["godfather"],"senhor":["lord"],"aneis":["rings"],
-              "aranha":["spider"],"homem":["man"],"mulher":["woman"],
-              "maravilha":["wonder"],"guerra":["war"],"estrelas":["stars","wars"],
-              "galaxia":["galaxy"],"guarda":["guardian"],"guardoes":["guardians"],
-              "mundo":["world"],"piratas":["pirates"],"caribe":["caribbean"],
-              "volta":["back"],"futuro":["future"],"origem":["origin","inception"],
-              "clube":["club"],"luta":["fight"],"silencio":["silence"],
-              "inocentes":["innocents","lambs"],"mortos":["dead"],
-              "noite":["night"],"dia":["day"],"trevas":["dark","darkness"],
-              "cavaleiro":["knight"],"cidade":["city"],"deus":["god"],
-              "rei":["king"],"rainha":["queen"],"amor":["love"],
-              "vida":["life"],"morte":["death"],"tempo":["time"],
-              "casa":["house"],"familia":["family"],
-              "amigo":["friend"],"inimigo":["enemy"],"sonho":["dream"],
-              "jogo":["game"],"lobo":["wolf"],"duna":["dune"],
-              "interestelar":["interstellar"],"sangue":["blood"],
-              "fogo":["fire"],"agua":["water"],"terra":["earth"],
-              "ceu":["sky","heaven"],"inferno":["hell"],
-              "fantasma":["ghost"],"monstro":["monster"],"heroi":["hero"],
-              "pai":["father"],"mae":["mother"],"filho":["son"],
-              "filha":["daughter"],"irmao":["brother"],"irma":["sister"],
-              "paz":["peace"],"luz":["light"],"sombra":["shadow"],
-              "estrada":["road"],"caminho":["path","way"],
-              "viagem":["journey"],"aventura":["adventure"],
-              "destino":["destiny","fate"],"medo":["fear"],"odio":["hate"],
-              "vinganca":["revenge"],"justica":["justice"],"crime":["crime"],
-              "policia":["police"],"assassino":["killer","assassin"],
-              "estrela":["star"],"lua":["moon"],"sol":["sun"],
-              "oceano":["ocean"],"mar":["sea"],"ilha":["island"],
-              "montanha":["mountain"],"floresta":["forest"],
-              "pais":["country"],"nacao":["nation"],"imperio":["empire"],
-              "reino":["kingdom"],"trono":["throne"],"espada":["sword"],
-              "magia":["magic"],"bruxa":["witch"],"vampiro":["vampire"],
-              "zumbi":["zombie"],"robo":["robot"],
-          }
+          ALIASES = {}
+          for _par in """vingadores=avengers poderoso=godfather chefao=godfather senhor=lord aneis=rings aranha=spider homem=man
+          mulher=woman maravilha=wonder guerra=war estrelas=stars,wars galaxia=galaxy guarda=guardian guardoes=guardians mundo=world
+          piratas=pirates caribe=caribbean volta=back futuro=future origem=origin,inception clube=club luta=fight silencio=silence
+          inocentes=innocents,lambs mortos=dead noite=night dia=day trevas=dark,darkness cavaleiro=knight cidade=city deus=god rei=king
+          rainha=queen amor=love vida=life morte=death tempo=time casa=house familia=family amigo=friend inimigo=enemy sonho=dream
+          jogo=game lobo=wolf duna=dune interestelar=interstellar sangue=blood fogo=fire agua=water terra=earth ceu=sky,heaven
+          inferno=hell fantasma=ghost monstro=monster heroi=hero pai=father mae=mother filho=son filha=daughter irmao=brother
+          irma=sister paz=peace luz=light sombra=shadow estrada=road caminho=path,way viagem=journey aventura=adventure
+          destino=destiny,fate medo=fear odio=hate vinganca=revenge justica=justice crime=crime policia=police
+          assassino=killer,assassin estrela=star lua=moon sol=sun oceano=ocean mar=sea ilha=island montanha=mountain
+          floresta=forest pais=country nacao=nation imperio=empire reino=kingdom trono=throne espada=sword magia=magic
+          bruxa=witch vampiro=vampire zumbi=zombie robo=robot""".split():
+              _k, _v = _par.split("=")
+              ALIASES[_k] = _v.split(",")
+
+          _BL = ["aula", "playlist", "gameplay", "walkthrough", "tutorial", "unboxing", "podcast", "entrevista", "interview",
+                 "trailer", "teaser", "audiobook", "audiolivro", "audio livro", "concerto", "show completo", "ao vivo em",
+                 "cd completo", "dvd completo", "compilacao", "compilation", "episodio", "episode", "temporada", "season",
+                 "matchday", "top 5 gol", "top 10 gol", "gols |", "| gols", "hurricane", "noticias ao vivo", "live:",
+                 "let's play", "lets play", "documentario", "documental", "vinheta", "globoplay", "globo video", "review",
+                 "reaction", "making of", "behind the scenes", "top 10", "top 5", "resumo", "resenha", "opiniao",
+                 "meditantes", "meditacao", "fosdem", "conference", "conferencia", "keynote", "palestra", "webinar",
+                 "coding", "programming", "developer", "livestream", "playthrough", "play-through"]
+          # palavra inteira (evita "coding" casar com "decoding")
+          RE_BLACKLIST = re.compile("|".join(r"(?<!\w)" + re.escape(t) + r"(?!\w)" for t in _BL))
+
 
           def normalizar(t):
-              t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
-              return t.lower()
+              return unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode("ascii").lower()
+
+          def limpar(t):
+              return re.sub(r"\s+", " ", RUIDO.sub(" ", normalizar(t))).strip()
 
           def similaridade(a, b):
-              return SequenceMatcher(None, normalizar(a), normalizar(b)).ratio()
+              return SequenceMatcher(None, limpar(a), limpar(b)).ratio()
 
-          def eh_ano(w):
-              return w.isdigit() and len(w) == 4 and 1900 <= int(w) <= 2099
+          def sem_ano(q):
+              return re.sub(r"\s*[\(\[]\d{4}[\)\]]\s*$", "", q).strip()
+
+          def extrair_ano(q):
+              m = re.search(r"[\(\[](\d{4})[\)\]]", q)
+              if m and 1900 <= int(m.group(1)) <= 2099:
+                  return int(m.group(1))
+              return None
+
+          def ano_bate(esperado, titulo):
+              if esperado is None:
+                  return "sem_ano_query"
+              anos = [int(y) for y in re.findall(r"\b(19\d{2}|20\d{2})\b", titulo)]
+              if not anos:
+                  return "sem_ano_titulo"
+              return "match" if any(abs(a - esperado) <= 1 for a in anos) else "diferente"
 
           def palavras_significativas(texto):
               n = re.sub(r"[^\w\s]", " ", normalizar(texto))
-              return [w for w in n.split()
-                      if w not in STOPWORDS and not eh_ano(w)
+              return [w for w in n.split() if w not in STOPWORDS
+                      and not (w.isdigit() and len(w) == 4 and 1900 <= int(w) <= 2099)
                       and (len(w) >= 4 or w.isdigit())]
 
-          def extrair_ano(query):
-              m = re.search(r'\((\d{4})\)|\[(\d{4})\]', query)
-              if m:
-                  for g in m.groups():
-                      if g and 1900 <= int(g) <= 2099:
-                          return int(g)
-              return None
-
-          def ano_bate(ano_esperado, titulo):
-              if ano_esperado is None:
-                  return "sem_ano_query"
-              anos_titulo = [int(y) for y in re.findall(r'\b(19\d{2}|20\d{2})\b', titulo)]
-              if not anos_titulo:
-                  return "sem_ano_titulo"
-              if any(abs(a - ano_esperado) <= 1 for a in anos_titulo):
-                  return "match"
-              return "diferente"
-
-          def classificar_audio(titulo):
-              tn = normalizar(titulo)
-              if any(p in tn for p in EN_SUB_MARKERS): return "en"
-              if any(p in tn for p in PT_BR_MARKERS): return "pt"
-              if any(c in titulo.lower() for c in "áàâãéêíóôõúüçñ"): return "pt"
-              words = set(re.findall(r"[^\W_]+", tn))
-              if words & PT_INDICATORS: return "pt"
-              if len(words & EN_COMMON) >= 2: return "en"
-              if len(words) <= 2: return "pt?"
-              return "?"
-
-          def eh_ptbr(titulo):
-              audio = classificar_audio(titulo)
-              if audio == "pt":     return True, "PT-BR"
-              if audio == "en":     return False, "inglês/legendado"
-              if audio == "pt?":    return True, "nome próprio"
-              if audio == "?":
-                  if ESTRITO_PTBR:  return False, "sem marcador PT"
-                  return True, "sem marcador (assumido PT)"
-              return True, ""
-
-          def comum_prefixo(a, b):
-              n = min(len(a), len(b))
-              for i in range(n):
-                  if a[i] != b[i]:
-                      return i
-              return n
-
-          def palavra_bate(word, text_words):
-              if word in text_words: return True
-              if word.isdigit() and word in NUMEROS:
-                  if any(n in text_words for n in NUMEROS[word]): return True
-              for num, syns in NUMEROS.items():
-                  if word in syns and num in text_words: return True
-              if word in ALIASES:
-                  if any(a in text_words for a in ALIASES[word]): return True
-              for en_w, pt_aliases in ALIASES.items():
-                  if word in pt_aliases and en_w in text_words: return True
-              if len(word) >= 6:
-                  for tw in text_words:
-                      if len(tw) >= 6:
-                          cp = comum_prefixo(word, tw)
-                          shorter = min(len(word), len(tw))
-                          if cp >= 6 and (cp / shorter) >= 0.7:
+          def palavra_bate(w, tw):
+              if w in tw:
+                  return True
+              if w in NUMEROS and any(n in tw for n in NUMEROS[w]):
+                  return True
+              for num, sins in NUMEROS.items():
+                  if w in sins and num in tw:
+                      return True
+              if w in ALIASES and any(a in tw for a in ALIASES[w]):
+                  return True
+              for en, pts in ALIASES.items():
+                  if w in pts and en in tw:
+                      return True
+              if len(w) >= 6:
+                  for x in tw:
+                      if len(x) >= 6:
+                          cp = 0
+                          for c1, c2 in zip(w, x):
+                              if c1 != c2:
+                                  break
+                              cp += 1
+                          if cp >= 6 and cp / min(len(w), len(x)) >= 0.7:
                               return True
               return False
 
           def eh_relevante(query, titulo):
-              ano = extrair_ano(query)
-              ano_status = ano_bate(ano, titulo)
-              if ano_status == "diferente":
+              base = sem_ano(query)
+              st = ano_bate(extrair_ano(query), titulo)
+              if st == "diferente":
                   return False
-              if ano_status == "sem_ano_titulo":
-                  if similaridade(query, titulo) < 0.6:
-                      return False
-              q = palavras_significativas(query)
+              if st == "sem_ano_titulo" and similaridade(base, titulo) < 0.6:
+                  return False
+              q = palavras_significativas(base)
               if q:
-                  tn = normalizar(titulo)
-                  text_words = set(re.findall(r"[^\W_]+", tn))
-                  if not all(palavra_bate(w, text_words) for w in q):
+                  tw = set(re.findall(r"[^\W_]+", normalizar(titulo)))
+                  if not all(palavra_bate(w, tw) for w in q):
                       return False
-              if similaridade(query, titulo) < 0.4:
-                  return False
-              return True
+              return similaridade(base, titulo) >= 0.4
 
           def passa_blacklist(titulo):
+              return not RE_BLACKLIST.search(normalizar(titulo))
+
+          def classificar_audio(titulo, lang=None):
               tn = normalizar(titulo)
-              return not any(n in tn for n in BLACKLIST)
+              if RE_PT.search(tn):
+                  return "pt"
+              if RE_EN.search(tn):
+                  return "en"
+              if lang == "pt":
+                  return "pt"
+              if any(c in titulo.lower() for c in "áàâãéêíóôõúüçñ"):
+                  return "pt"
+              words = set(re.findall(r"[^\W_]+", tn))
+              if words & PT_WORDS:
+                  return "pt"
+              if len(words & EN_WORDS) >= 2:
+                  return "en"
+              return "pt?" if len(words) <= 2 else "?"
 
-          def formatar_duracao(seg):
-              h,m,s = seg//3600,(seg%3600)//60,seg%60
-              return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+          def eh_ptbr(titulo, lang=None):
+              a = classificar_audio(titulo, lang)
+              if a == "pt":
+                  return True, "PT-BR"
+              if a == "en":
+                  return False, "inglês/legendado"
+              if a == "pt?":
+                  return True, "nome próprio"
+              return (False, "sem marcador PT") if ESTRITO_PTBR else (True, "sem marcador (assumido PT)")
 
-          def slugify(t):
-              t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
-              t = re.sub(r"[^\w\s-]", "", t).strip().lower()
-              return re.sub(r"[-\s]+", "-", t)[:80] or "video"
-
-          def tempo_esgotado():
-              return (time.time() - INICIO) > LIMITE_SEG
-
-          def barra_progresso(atual, total, filme="", sufixo=""):
-              pct = int(100 * atual / total) if total else 0
-              bloco = pct // 5
-              barra = "█" * bloco + "░" * (20 - bloco)
-              nome = (filme[:38] + "…") if len(filme) > 38 else filme
-              sys.stdout.write(f"\r[{barra}] {pct:3d}% {atual}/{total} {nome:<40} {sufixo}")
-              sys.stdout.flush()
-
-          def gerar_html(titulo, thumb, link, outdir):
-              os.makedirs(outdir, exist_ok=True)
-              filename = os.path.join(outdir, slugify(titulo) + ".html")
-              json_ld = {
-                  "@context": "https://schema.org", "@type": "VideoObject",
-                  "supportPlatform": ["https://schema.org/IOSPlatform","https://schema.org/AndroidPlatform"],
-                  "name": titulo, "description": "Assista " + titulo,
-                  "thumbnailUrl": [thumb] if thumb else [], "contentUrl": link,
-              }
-              tpl = """<!DOCTYPE html>
+          # ───────────── HTML ─────────────
+          TPL = """<!DOCTYPE html>
           <html lang="pt-BR"><head><meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <script type="application/ld+json">{jl}</script>
-          <title>{t}</title>
-          <style>body{{background:#000;color:#fff;font-family:sans-serif;margin:0;padding:20px}}h1{{font-size:24px;text-align:center;margin-bottom:30px}}</style>
+          <title>__T__</title>
+          <meta name="description" content="__D__">
+          <meta property="og:title" content="__T__">
+          <meta property="og:image" content="__TH__">
+          <script type="application/ld+json">__JL__</script>
+          <style>body{background:#000;color:#fff;font-family:sans-serif;margin:0;padding:20px}h1{font-size:24px;text-align:center;margin-bottom:30px}</style>
           </head><body>
-          <h1>{t}</h1>
+          <h1>__T__</h1>
           <div style="background:#0b0b12;border-radius:20px;overflow:hidden;box-shadow:0 25px 60px rgba(0,0,0,.8);margin:25px 0;border:1px solid rgba(255,255,255,.06);">
-            <a href="{l}" target="_blank" style="display:block;position:relative;text-decoration:none;">
-              <img src="{th}" style="width:100%;display:block;">
+            <a href="__L__" target="_blank" rel="noopener" style="display:block;position:relative;text-decoration:none;">
+              <img src="__TH__" alt="__T__" loading="lazy" style="width:100%;display:block;">
               <div style="position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,0.7),transparent);"></div>
               <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:70px;height:70px;background:linear-gradient(135deg,#7a00ff,#c000ff);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 20px rgba(120,0,255,.6);color:white;font-size:26px;border:2px solid rgba(255,255,255,.2);">▶</div>
               <div style="position:absolute;top:12px;right:12px;background:#ff003c;padding:6px 12px;border-radius:20px;font-size:11px;color:#fff;font-weight:bold;">HD</div>
             </a>
           </div></body></html>"""
-              with open(filename, "w", encoding="utf-8") as f:
-                  f.write(tpl.format(jl=json.dumps(json_ld, ensure_ascii=False, indent=2),
-                                     t=html_escape(titulo), l=html_escape(link), th=html_escape(thumb)))
 
-          def carregar_filmes_txt():
-              if not os.path.exists(ARQ_FILMES_TXT): return []
-              with open(ARQ_FILMES_TXT, "r", encoding="utf-8") as f:
-                  return [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
+          def slugify(t):
+              t = unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode("ascii")
+              t = re.sub(r"[^\w\s-]", "", t).strip().lower()
+              return re.sub(r"[-\s]+", "-", t)[:80] or "video"
 
-          def carregar_estado():
-              if os.path.exists(ARQ_ESTADO):
-                  try:
-                      with open(ARQ_ESTADO, "r", encoding="utf-8") as f:
-                          return json.load(f)
-                  except Exception: pass
-              return {"pendentes": [], "processados": [], "execucoes": 0, "ultima_execucao": None}
+          def iso_dur(seg):
+              return f"PT{seg // 3600}H{(seg % 3600) // 60}M{seg % 60}S"
 
-          def salvar_estado(estado):
-              estado["ultima_execucao"] = datetime.now(timezone.utc).isoformat()
+          def fmt_dur(seg):
+              h, m, s = seg // 3600, (seg % 3600) // 60, seg % 60
+              return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+
+          def caminho_unico(titulo, link):
+              base = os.path.join(OUTDIR, slugify(titulo))
+              p = base + ".html"
+              if os.path.exists(p):
+                  with open(p, "r", encoding="utf-8") as f:
+                      if esc(link) not in f.read():          # outro vídeo com o mesmo nome → sufixo
+                          p = f"{base}-{hashlib.md5(link.encode()).hexdigest()[:6]}.html"
+              return p
+
+          def gerar_html(v):
+              os.makedirs(OUTDIR, exist_ok=True)
+              ld = {"@context": "https://schema.org", "@type": "VideoObject",
+                    "supportPlatform": ["https://schema.org/IOSPlatform", "https://schema.org/AndroidPlatform"],
+                    "name": v["nome"], "description": "Assista " + v["nome"],
+                    "thumbnailUrl": [v["thumb"]] if v["thumb"] else [], "contentUrl": v["link"],
+                    "duration": iso_dur(v["dur"])}
+              if v.get("data"):
+                  ld["uploadDate"] = v["data"]
+              if v.get("embed"):
+                  ld["embedUrl"] = v["embed"]
+              jl = json.dumps(ld, ensure_ascii=False, indent=2).replace("</", "<\\/")
+              html = (TPL.replace("__JL__", jl).replace("__T__", esc(v["nome"]))
+                         .replace("__D__", esc("Assista " + v["nome"])).replace("__L__", esc(v["link"]))
+                         .replace("__TH__", esc(v["thumb"])))
+              with open(caminho_unico(v["nome"], v["link"]), "w", encoding="utf-8") as f:
+                  f.write(html)
+
+          # ───────────── estado (compacto: cursor sobre o filmes.txt) ─────────────
+          def carregar_filmes():
+              if not os.path.exists(ARQ_FILMES):
+                  return []
+              with open(ARQ_FILMES, "r", encoding="utf-8") as f:
+                  linhas = [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
+              return list(dict.fromkeys(linhas))               # sem duplicados, mantém a ordem
+
+          def estado_novo():
+              return {"cursor": 0, "extras": [], "retry": {}, "execucoes": 0, "ultima_execucao": None}
+
+          def carregar_estado(filmes):
+              if not os.path.exists(ARQ_ESTADO):
+                  return estado_novo()
+              try:
+                  with open(ARQ_ESTADO, "r", encoding="utf-8") as f:
+                      est = json.load(f)
+              except Exception as e:                           # nunca zerar a fila em silêncio
+                  sys.exit(f"❌ {ARQ_ESTADO} ilegível ({e}). Corrija o arquivo ou rode com 'resetar'.")
+              if "cursor" not in est:                          # migração do formato antigo
+                  proc = set(est.get("processados", []))
+                  c = 0
+                  for f in filmes:
+                      if f not in proc:
+                          break
+                      c += 1
+                  novo = estado_novo()
+                  novo["cursor"] = c
+                  novo["execucoes"] = est.get("execucoes", 0)
+                  print(f"🔁 Estado antigo migrado: {len(proc)} processados → cursor em {c}")
+                  return novo
+              for k, v in estado_novo().items():
+                  est.setdefault(k, v)
+              return est
+
+          def salvar_estado(est):
+              est["ultima_execucao"] = datetime.now(timezone.utc).isoformat()
               with open(ARQ_ESTADO, "w", encoding="utf-8") as f:
-                  json.dump(estado, f, ensure_ascii=False, indent=2)
-
-          def sincronizar(estado, filmes_txt):
-              estado["pendentes"] = [f for f in estado["pendentes"] if f in filmes_txt]
-              novos = [f for f in filmes_txt
-                       if f not in estado["processados"] and f not in estado["pendentes"]]
-              estado["pendentes"].extend(novos)
-              return novos
-
-          def buscar_tankietube(query, outdir, encontrados):
-              n = 0
-              for tentativa in range(3):
-                  try:
-                      r = requests.get("https://tankie.tube/api/v1/search/videos",
-                                       params={"search": query, "count": 10}, timeout=30)
-                      r.raise_for_status()
-                      videos = r.json().get("data", [])
-                      for v in videos:
-                          name = v.get("name", "")
-                          dur = v.get("duration", 0) or 0
-                          if dur < MIN_DURACAO: continue
-                          if not passa_blacklist(name): continue
-                          if not eh_relevante(query, name): continue
-                          pt_ok, motivo = eh_ptbr(name)
-                          if not pt_ok: continue
-                          link = v.get("url") or f"https://tankie.tube/w/{v.get('shortUUID','')}"
-                          tp = v.get("thumbnailPath") or v.get("previewPath") or ""
-                          thumb = f"https://tankie.tube{tp}" if tp else ""
-                          if name and link:
-                              gerar_html(name, thumb, link, outdir)
-                              encontrados.add(name); n += 1
-                              print(f"      [OK] {name} ({formatar_duracao(dur)}) [{motivo}]")
-                      return n
-                  except requests.exceptions.Timeout:
-                      if tentativa < 2:
-                          print(f"      [timeout] tentando novamente ({tentativa+2}/3)...")
-                          time.sleep(3)
-                      else:
-                          print(f"      [ERRO] timeout após 3 tentativas")
-                  except Exception as e:
-                      print(f"      [ERRO] {e}")
-                      break
-              return n
+                  json.dump(est, f, ensure_ascii=False, indent=1)
 
           def carregar_titulos():
-              if not os.path.exists(ARQ_TITULOS): return set()
+              if not os.path.exists(ARQ_TITULOS):
+                  return set()
               with open(ARQ_TITULOS, "r", encoding="utf-8") as f:
                   return {l.strip() for l in f if l.strip()}
 
-          def salvar_titulos(titulos):
+          def salvar_titulos(ts):
               with open(ARQ_TITULOS, "w", encoding="utf-8") as f:
-                  for t in sorted(titulos):
-                      f.write(t + "\n")
+                  f.write("".join(t + "\n" for t in sorted(ts)))
+
+          # ───────────── busca ─────────────
+          S = requests.Session()
+          S.headers["User-Agent"] = "Mozilla/5.0 (compatible; catalogo-bot)"
+          S.mount("https://", HTTPAdapter(max_retries=Retry(
+              total=3, backoff_factor=2, status_forcelist=(429, 500, 502, 503, 504),
+              allowed_methods=frozenset(["GET"]))))
+
+          def buscar(filme):
+              """→ (videos, ok, erro). ok=False quando a API falhou (não é 'sem resultado')."""
+              try:
+                  r = S.get(f"{BASE}/api/v1/search/videos", timeout=30, params={
+                      "search": sem_ano(filme), "count": 20, "sort": "-match",
+                      "durationMin": MIN_DURACAO, "searchTarget": "local"})
+                  r.raise_for_status()
+                  dados = r.json().get("data", [])
+              except Exception as e:
+                  return [], False, str(e)[:90]
+              achados = []
+              for v in dados:
+                  nome = (v.get("name") or "").strip()
+                  dur = v.get("duration") or 0
+                  if not nome or dur < MIN_DURACAO or not passa_blacklist(nome) or not eh_relevante(filme, nome):
+                      continue
+                  pt_ok, motivo = eh_ptbr(nome, (v.get("language") or {}).get("id"))
+                  if not pt_ok:
+                      continue
+                  link = v.get("url") or f"{BASE}/w/{v.get('shortUUID', '')}"
+                  tp = v.get("thumbnailPath") or v.get("previewPath") or ""
+                  achados.append({"nome": nome, "dur": dur, "link": link, "motivo": motivo,
+                                  "thumb": f"{BASE}{tp}" if tp else "", "data": v.get("publishedAt"),
+                                  "embed": f"{BASE}/videos/embed/{v['uuid']}" if v.get("uuid") else ""})
+              time.sleep(0.2)
+              return achados, True, ""
+
+          def tempo_esgotado():
+              return (time.time() - INICIO) > LIMITE_SEG
+
+          def resumo_md(linhas):
+              p = os.environ.get("GITHUB_STEP_SUMMARY")
+              if p:
+                  with open(p, "a", encoding="utf-8") as f:
+                      f.write("\n".join(linhas) + "\n")
 
           def main():
-              filmes_txt = carregar_filmes_txt()
-              entrada = os.environ.get("FILMES_INPUT", "").strip()
-              if entrada:
-                  for e in [f.strip() for f in entrada.split(",") if f.strip()]:
-                      if e not in filmes_txt: filmes_txt.append(e)
-
-              estado = carregar_estado()
+              filmes = carregar_filmes()
               if RESETAR:
                   print("🔄 RESETANDO fila...")
-                  estado = {"pendentes": [], "processados": [], "execucoes": 0, "ultima_execucao": None}
+              est = estado_novo() if RESETAR else carregar_estado(filmes)
+              est["cursor"] = min(est["cursor"], len(filmes))
 
-              novos = sincronizar(estado, filmes_txt)
-              if novos:
-                  print(f"➕ {len(novos)} novo(s) filme(s) adicionado(s) à fila")
+              entrada = os.environ.get("FILMES_INPUT", "").strip()
+              for e in (x.strip() for x in entrada.split(",")) if entrada else []:
+                  if e and e not in est["extras"]:
+                      est["extras"].append(e)
 
-              print(f"🎙️ Modo PT-BR: {'ESTRITO' if ESTRITO_PTBR else 'PERMISSIVO'}")
+              print(f"🎙️ Modo PT-BR: {'ESTRITO' if ESTRITO_PTBR else 'PERMISSIVO'} | filmes.txt: {len(filmes)} | cursor: {est['cursor']}")
 
-              total_geral = len(estado["processados"]) + len(estado["pendentes"])
-              total_proc  = len(estado["processados"])
+              itens = [(f, "extra") for f in est["extras"][:LOTE]]
+              if len(itens) < LOTE:
+                  itens += [(f, "retry") for f in list(est["retry"])[:LOTE - len(itens)]]
+              if len(itens) < LOTE:
+                  c = est["cursor"]
+                  itens += [(f, "fila") for f in filmes[c:c + LOTE - len(itens)]]
 
-              if not estado["pendentes"]:
-                  print("\n✅ Fila vazia.")
-                  salvar_estado(estado)
-                  with open("/tmp/faltam.txt","w") as f: f.write("0")
+              if not itens:
+                  print("✅ Fila vazia.")
+                  salvar_estado(est)
+                  open("/tmp/faltam.txt", "w").write("0")
                   return
 
-              lote = estado["pendentes"][:LOTE]
-              print(f"\n══════ Fila: {total_proc}/{total_geral} — processando {len(lote)} (lote de {LOTE}) ══════\n")
-
+              print(f"══════ processando {len(itens)} (lote {LOTE}) ══════")
               encontrados = carregar_titulos()
-              gerados_agora = 0
-              processados_agora = 0
+              novos_html = feitos = seguidas = 0
+              abortou = False
+              tam = THREADS * 2
 
-              for i, filme in enumerate(lote, 1):
-                  if tempo_esgotado():
-                      print(f"\n⏰ Orçamento de tempo esgotado — parando no filme {i}")
-                      break
+              with ThreadPoolExecutor(THREADS) as pool:
+                  for n, ini in enumerate(range(0, len(itens), tam), 1):
+                      if tempo_esgotado():
+                          print("⏰ Orçamento de tempo esgotado — parando.")
+                          break
+                      chunk = itens[ini:ini + tam]
+                      resultados = list(pool.map(lambda it: buscar(it[0]), chunk))
+                      for (filme, tipo), (videos, ok, erro) in zip(chunk, resultados):
+                          feitos += 1
+                          if ok:
+                              seguidas = 0
+                              est["retry"].pop(filme, None)
+                              for v in videos:
+                                  gerar_html(v)
+                                  encontrados.add(v["nome"])
+                                  novos_html += 1
+                                  print(f"   [OK] {filme} → {v['nome']} ({fmt_dur(v['dur'])}) [{v['motivo']}]")
+                          else:
+                              seguidas += 1
+                              t = est["retry"].get(filme, 0) + 1
+                              if t < MAX_TENT:
+                                  est["retry"][filme] = t
+                              else:
+                                  est["retry"].pop(filme, None)
+                              print(f"   [ERRO] {filme}: {erro} (tentativa {t}/{MAX_TENT})")
+                          if tipo == "extra" and filme in est["extras"]:
+                              est["extras"].remove(filme)
+                          elif tipo == "fila":
+                              est["cursor"] += 1
+                      est["execucoes"] += len(chunk)
+                      salvar_estado(est)
+                      if n % 10 == 0:
+                          salvar_titulos(encontrados)
+                      print(f"📊 {feitos}/{len(itens)} | cursor {est['cursor']}/{len(filmes)} | HTMLs {novos_html}")
+                      if seguidas >= MAX_FALHAS_SEGUIDAS:
+                          abortou = True
+                          _orig_print("::warning::Tankie.Tube instável — run interrompida; o progresso foi salvo.")
+                          break
 
-                  barra_progresso(i, len(lote), filme,
-                                  f"[fila: {total_proc + i - 1}/{total_geral}]")
-                  print(f"\n[{i}/{len(lote)}] {filme}  (fila: {total_proc + i}/{total_geral})")
-
-                  a = buscar_tankietube(filme, "tankie", encontrados) # ⭐ PASTA TANKIE
-                  print(f"      → Total: {a}")
-
-                  estado["pendentes"].remove(filme)
-                  estado["processados"].append(filme)
-                  processados_agora += 1
-                  gerados_agora += a
-                  estado["execucoes"] += 1
-                  salvar_estado(estado)
-                  salvar_titulos(encontrados)
-
-              total_proc = len(estado["processados"])
-              restantes  = len(estado["pendentes"])
+              salvar_titulos(encontrados)
+              salvar_estado(est)
+              restantes = len(est["extras"]) + len(est["retry"]) + max(0, len(filmes) - est["cursor"])
+              open("/tmp/faltam.txt", "w").write("0" if abortou else str(restantes))
 
               print("\n══════════ RESUMO ══════════")
-              print(f"Processados agora: {processados_agora} | Total: {total_proc}/{total_geral} | Restantes: {restantes}")
-              print(f"HTMLs gerados: {gerados_agora} | Títulos totais: {len(encontrados)}")
-              if restantes > 0:
-                  print(f"Próximo lote: {', '.join(estado['pendentes'][:3])}{'...' if restantes>3 else ''}")
-              else:
-                  print("🎉 Fila concluída!")
-              print("════════════════════════════")
+              print(f"Processados: {feitos} | HTMLs gerados: {novos_html} | Restantes: {restantes}")
+              resumo_md(["### Tankie.Tube", f"- Processados: {feitos}", f"- HTMLs gerados: **{novos_html}**",
+                         f"- Restantes: {restantes}", f"- Interrompida por falhas: {'sim' if abortou else 'não'}"])
 
-              salvar_estado(estado)
-              with open("/tmp/faltam.txt","w") as f: f.write(str(restantes))
 
           if __name__ == "__main__":
               main()
@@ -517,94 +504,49 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: python -u busca.py
 
-      - name: Commit e push (com merge inteligente)
+      - name: Commit e push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config pull.rebase true
-          
           export GIT_EDITOR=true
-          git config --global core.editor "true"
-          
+          # listas compartilhadas: em conflito, junta as linhas das duas versões (nada se perde)
+          printf "%s\n" "titulos_encontrados.txt merge=union" "filmes.txt merge=union" >> .git/info/attributes
           mkdir -p tankie
-          touch titulos_encontrados.txt fila_estado.json
-          git add tankie/ titulos_encontrados.txt fila_estado.json # ⭐ ADD TANKIE
+          git add tankie/ titulos_encontrados.txt fila_estado.json
           if git diff --cached --quiet; then
             echo "Nenhuma alteração."; exit 0
           fi
-          git commit -m "chore: Tankie — novos filmes [skip ci] run=${{ github.run_id }}"
-          
+          git commit -m "chore: Tankie — novos filmes [skip ci]"
           for i in 1 2 3 4 5; do
-            echo "→ Push tentativa $i..."
-            
-            if git pull --rebase origin "${GITHUB_REF_NAME}"; then
-              if git push origin "${GITHUB_REF_NAME}"; then
-                echo "✅ Push OK na tentativa $i."
-                exit 0
-              fi
-            else
-              echo "⚠️ Conflito detectado! Resolvendo automaticamente..."
-              python - <<'EOF'
-          import json, os
-
-          if os.path.exists("fila_estado.json"):
-              try:
-                  with open("fila_estado.json", "r", encoding="utf-8") as f:
-                      local = json.load(f)
-              except:
-                  local = {"pendentes": [], "processados": [], "execucoes": 0, "ultima_execucao": None}
-              
-              with open("fila_estado.json", "w", encoding="utf-8") as f:
-                  json.dump(local, f, ensure_ascii=False, indent=2)
-
-          if os.path.exists("titulos_encontrados.txt"):
-              with open("titulos_encontrados.txt", "r", encoding="utf-8") as f:
-                  linhas = f.read().splitlines()
-              titulos = set(l.strip() for l in linhas if l.strip() and not l.startswith(("<<<<<<<", "=======", ">>>>>>>")))
-              with open("titulos_encontrados.txt", "w", encoding="utf-8") as f:
-                  for t in sorted(titulos):
-                      f.write(t + "\n")
-          EOF
-              
-              git add fila_estado.json titulos_encontrados.txt
-              GIT_EDITOR=true git rebase --continue
-              
-              if git push origin "${GITHUB_REF_NAME}"; then
-                echo "✅ Push OK após resolução de conflito."
-                exit 0
-              fi
+            # -X theirs no rebase = prevalece o que ESTA run gerou (o estado é só deste robô)
+            if git pull --rebase -X theirs origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME"; then
+              echo "✅ Push OK (tentativa $i)"; exit 0
             fi
-            
-            echo "⚠️  Falhou, aguardando $((i*5))s..."
-            sleep $((i*5))
+            git rebase --abort 2>/dev/null || true
+            echo "⚠️ Falhou, aguardando $((i*5))s..."; sleep $((i*5))
           done
           exit 1
 
       - name: Disparar próxima run
-        if: |
-          success() && (
-            github.event_name == 'schedule' ||
-            inputs.auto_run == true ||
-            inputs.auto_run == 'true'
-          )
+        if: success() && (github.event_name == 'schedule' || inputs.auto_run == true || inputs.auto_run == 'true')
         env:
-          GH_TOKEN: ${{ secrets.PAT_CHAIN }}
+          # PAT_CHAIN é opcional: sem ele usa o GITHUB_TOKEN (que pode disparar workflow_dispatch)
+          GH_TOKEN: ${{ secrets.PAT_CHAIN || github.token }}
           REPO: ${{ github.repository }}
-          LOTE_IN: ${{ inputs.lote || '200' }}
+          LOTE_IN: ${{ inputs.lote || 200 }}
+          ESTRITO_IN: ${{ inputs.estrito_ptbr || 'false' }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "⚠️  PAT_CHAIN não configurado."; exit 0
-          fi
           FALTAM=$(cat /tmp/faltam.txt 2>/dev/null || echo 0)
           echo "📊 Faltam: $FALTAM"
-          if [ "${FALTAM:-0}" -le 0 ]; then exit 0; fi
-          LIMITE_ISO=$(date -u -d '60 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
-          RECENTES=$(gh run list --workflow="busca_tankie.yml" --event workflow_dispatch --limit 100 \
-            --json createdAt --jq "[.[] | select(.createdAt > \"$LIMITE_ISO\")] | length" \
-            --repo "$REPO" 2>/dev/null || echo 0)
+          if [ "${FALTAM:-0}" -le 0 ]; then echo "✅ Nada mais a processar."; exit 0; fi
+          WF="$(basename "${GITHUB_WORKFLOW_REF%%@*}")"
+          DESDE=$(date -u -d "60 minutes ago" +%Y-%m-%dT%H:%M:%SZ)
+          RECENTES=$(gh run list --repo "$REPO" --workflow "$WF" --limit 100 --json createdAt \
+            --jq "[.[] | select(.createdAt > \"$DESDE\")] | length" 2>/dev/null || echo 0)
           echo "🔁 Runs na última hora: $RECENTES"
-          if [ "${RECENTES:-0}" -ge 60 ]; then exit 0; fi
-          sleep 30
-          gh workflow run "busca_tankie.yml" --repo "$REPO" --ref "${GITHUB_REF_NAME}" \
-            -f auto_run=true -f lote="${LOTE_IN}" -f resetar=false -f filmes="" -f estrito_ptbr=false
+          if [ "${RECENTES:-0}" -ge 30 ]; then echo "🛑 Limite de runs/hora atingido."; exit 0; fi
+          sleep 20
+          gh workflow run "$WF" --repo "$REPO" --ref "$GITHUB_REF_NAME" \
+            -f auto_run=true -f lote="$LOTE_IN" -f resetar=false -f filmes="" -f estrito_ptbr="$ESTRITO_IN"
           echo "✅ Próxima run disparada."
