@@ -1,7 +1,9 @@
 {
- "cursor": 18498,
+ "cursor": 18998,
  "extras": [],
- "retry": {},
- "execucoes": 18500,
- "ultima_execucao": "2026-11-16T03:30:03.698091+00:00"
+ "retry": {
+  "Corra que a Polícia Vem Aí! 2½ (1991)": 1
+ },
+ "execucoes": 19000,
+ "ultima_execucao": "2026-11-16T03:33:11.615599+00:00"
 }
