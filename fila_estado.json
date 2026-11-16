@@ -1,7 +1,9 @@
 {
- "cursor": 23594,
+ "cursor": 23794,
  "extras": [],
- "retry": {},
- "execucoes": 23600,
- "ultima_execucao": "2026-11-16T04:50:28.557136+00:00"
+ "retry": {
+  "1½ Ritter - Auf der Suche nach der hinreißenden Herzelinde (2008)": 1
+ },
+ "execucoes": 23800,
+ "ultima_execucao": "2026-11-16T04:52:11.646029+00:00"
 }
