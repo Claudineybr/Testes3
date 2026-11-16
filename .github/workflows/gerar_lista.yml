@@ -1,20 +1,31 @@
-name: Gerar filmes.txt via TMDB (Preservando Tudo)
+name: Gerar filmes.txt via TMDB (Append)
 
 on:
   workflow_dispatch:
     inputs:
+      modo:
+        description: 'incremental = só anos recentes | completo = todos os anos do intervalo'
+        type: choice
+        options: [completo, incremental]
+        default: completo
       ano_min:
         description: 'Ano mínimo (1900 para pegar tudo)'
         type: number
         default: 1900
         required: false
       ano_max:
-        description: 'Ano máximo'
+        description: 'Ano máximo (0 = ano atual)'
         type: number
-        default: 2026
+        default: 0
+        required: false
+      votos_min:
+        description: 'Votos mínimos no TMDB (filtra lixo)'
+        type: number
+        default: 10
         required: false
   schedule:
-    - cron: '0 0 * * *'   # Todo dia à meia-noite (UTC)
+    - cron: '0 0 * * *'   # todo dia: incremental (ano atual e anterior)
+    - cron: '0 3 * * 0'   # domingo: completo (pega o que escapou)
 
 permissions:
   contents: write
@@ -26,29 +37,27 @@ concurrency:
 jobs:
   gerar:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Instalar dependências
         run: pip install requests
 
-      - name: Gerar lista via TMDB (Máximo + Append)
-        env:
-          TMDB_KEY: ${{ secrets.TMDB_API_KEY }}
-          ANO_MIN: ${{ inputs.ano_min || '1900' }}
-          ANO_MAX: ${{ inputs.ano_max || '2026' }}
-          PYTHONUNBUFFERED: "1"
+      - name: Criar script
         run: |
-          python -u - <<'PYEOF'
+          cat << 'PYEOF' > tmdb.py
           import os, sys, time, requests
-          from datetime import datetime
+          from concurrent.futures import ThreadPoolExecutor
+          from datetime import datetime, timezone
+          from requests.adapters import HTTPAdapter
+          from urllib3.util.retry import Retry
 
           try:
               sys.stdout.reconfigure(line_buffering=True)
@@ -58,110 +67,138 @@ jobs:
           _orig_print = print
           def print(*args, **kwargs):
               kwargs.setdefault("flush", True)
-              ts = datetime.now().strftime("%H:%M:%S")
-              _orig_print(f"[{ts}]", *args, **kwargs)
+              _orig_print(f"[{datetime.now().strftime('%H:%M:%S')}]", *args, **kwargs)
 
-          KEY = os.environ["TMDB_KEY"]
-          ANO_MIN = os.environ.get("ANO_MIN") or "1900"
-          ANO_MAX = os.environ.get("ANO_MAX") or "2026"
-          LANG = "pt-BR"
+          ARQ = "filmes.txt"
+          URL = "https://api.themoviedb.org/3/discover/movie"
+          HOJE = datetime.now(timezone.utc).year
+          WORKERS = 8
 
-          CATEGORIAS = [
-              "popularity.desc",  
-              "vote_average.desc", 
-              "revenue.desc"       
-          ]
+          def inteiro(nome, padrao):
+              try:
+                  v = int(float(os.environ.get(nome) or 0))
+              except ValueError:
+                  v = 0
+              return v or padrao
 
-          vistos = set()
+          ANO_MIN = inteiro("ANO_MIN", 1900)
+          ANO_MAX = inteiro("ANO_MAX", HOJE)
+          VOTOS_MIN = inteiro("VOTOS_MIN", 10)
+          MODO = os.environ.get("MODO") or "incremental"
+          KEY = (os.environ.get("TMDB_KEY") or "").strip()
 
-          print(f"🔍 Buscando o MÁXIMO de filmes no TMDB ({ANO_MIN}-{ANO_MAX})")
-          print(f"📂 Categorias: {', '.join(CATEGORIAS)}")
+          if not KEY:
+              sys.exit("❌ Secret TMDB_API_KEY não configurado.")
 
-          for cat in CATEGORIAS:
-              print(f"\n🌐 Categoria: {cat}")
-              
-              for pag in range(1, 501):
-                  if pag % 50 == 0:
-                      print(f"  → Página {pag}/500... (Total único: {len(vistos)})")
+          S = requests.Session()
+          AUTH = {}
+          if KEY.startswith("eyJ"):                       # token v4 (Bearer)
+              S.headers["Authorization"] = f"Bearer {KEY}"
+          else:                                           # chave v3
+              AUTH = {"api_key": KEY}
+          S.mount("https://", HTTPAdapter(max_retries=Retry(
+              total=5, backoff_factor=1.5,
+              status_forcelist=(429, 500, 502, 503, 504),
+              allowed_methods=frozenset(["GET"]))))
 
-                  params = {
-                      "api_key": KEY,
-                      "language": LANG,
-                      "sort_by": cat,
-                      "include_adult": "false",
-                      "include_video": "false",
-                      "page": pag,
-                      "vote_count.gte": 10, 
-                      "primary_release_date.gte": f"{ANO_MIN}-01-01",
-                      "primary_release_date.lte": f"{ANO_MAX}-12-31",
-                  }
 
-                  try:
-                      r = requests.get("https://api.themoviedb.org/3/discover/movie",
-                                       params=params, timeout=30)
-                      if r.status_code == 429:
-                          print("  ⚠️ Rate limit atingido, aguardando 2s...")
-                          time.sleep(2)
-                          r = requests.get("https://api.themoviedb.org/3/discover/movie",
-                                           params=params, timeout=30)
-                      
-                      if r.status_code != 200:
-                          print(f"  ⚠️ Página {pag} retornou {r.status_code}. Fim da categoria.")
-                          break
-                  except Exception as e:
-                      print(f"  ⚠️ Erro na página {pag}: {e}")
-                      break
+          def pagina(ano, sort, pag):
+              params = dict(AUTH, language="pt-BR", sort_by=sort, include_adult="false",
+                            include_video="false", page=pag, **{
+                                "vote_count.gte": VOTOS_MIN,
+                                "primary_release_date.gte": f"{ano}-01-01",
+                                "primary_release_date.lte": f"{ano}-12-31"})
+              try:
+                  r = S.get(URL, params=params, timeout=30)
+                  r.raise_for_status()
+                  return r.json()
+              except Exception as e:
+                  print(f"  ⚠️ {ano} {sort} pág {pag}: {str(e)[:80]}")
+                  return {}
 
-                  data = r.json()
-                  resultados = data.get("results", [])
-                  
-                  if not resultados:
-                      break
 
-                  for m in resultados:
-                      titulo = (m.get("title") or "").strip()
-                      ano = (m.get("release_date") or "")[:4]
-                      if not titulo: continue
-                      
-                      linha = f"{titulo} ({ano})" if ano else titulo
-                      vistos.add(linha)
+          def coletar(ano, sort, primeira=None):
+              d1 = primeira or pagina(ano, sort, 1)
+              total = min(d1.get("total_pages", 1) or 1, 500)       # teto da API
+              res = list(d1.get("results", []))
+              if total > 1:
+                  with ThreadPoolExecutor(WORKERS) as ex:
+                      for d in ex.map(lambda p: pagina(ano, sort, p), range(2, total + 1)):
+                          res.extend(d.get("results", []))
+              return res
 
-                  time.sleep(0.05)
 
-          print(f"\n✅ Filmes retornados pelo TMDB nesta rodada: {len(vistos)}")
+          def linha(m):
+              titulo = " ".join((m.get("title") or "").split())
+              if not titulo:
+                  return None
+              ano = (m.get("release_date") or "")[:4]
+              return f"{titulo} ({ano})" if ano else titulo
 
-          # ⭐ AQUI ESTÁ A PRESERVAÇÃO ABSOLUTA
-          existentes = set()
-          if os.path.exists("filmes.txt"):
-              with open("filmes.txt", "r", encoding="utf-8") as f:
-                  for l in f:
-                      l = l.strip()
-                      # Ignora cabeçalhos (linhas com #) e linhas vazias
-                      if l and not l.startswith("#"):
-                          existentes.add(l)
 
-          # Filtra apenas os filmes que NÃO estão no arquivo
-          novos_titulos = []
-          for t in vistos:
-              if t not in existentes:
-                  novos_titulos.append(t)
+          def main():
+              if MODO == "incremental":
+                  anos = [a for a in (HOJE, HOJE - 1) if ANO_MIN <= a <= ANO_MAX]
+              else:
+                  anos = list(range(ANO_MAX, ANO_MIN - 1, -1))        # mais novos primeiro
+              print(f"🔍 Modo: {MODO} | anos: {anos[0] if anos else '-'}…{anos[-1] if anos else '-'} "
+                    f"({len(anos)}) | votos mín.: {VOTOS_MIN}")
 
-          print(f"📂 Já existiam no arquivo: {len(existentes)}")
-          print(f"➕ Novos filmes a serem adicionados: {len(novos_titulos)}")
+              vistos = {}                                              # dict = mantém ordem
+              for ano in anos:
+                  primeira = pagina(ano, "popularity.desc", 1)
+                  total_res = primeira.get("total_results", 0)
+                  sorts = ["popularity.desc"]
+                  if total_res > 10000:                                # passou do teto de 500 págs
+                      sorts += ["vote_average.desc", "revenue.desc"]
+                  antes = len(vistos)
+                  for sort in sorts:
+                      for m in coletar(ano, sort, primeira if sort == sorts[0] else None):
+                          l = linha(m)
+                          if l:
+                              vistos.setdefault(l, None)
+                  print(f"📅 {ano}: {total_res} filmes na API | +{len(vistos) - antes} únicos | total {len(vistos)}")
 
-          if novos_titulos:
-              # Abre o arquivo em modo 'a' (append) - Só adiciona no final, nunca apaga
-              with open("filmes.txt", "a", encoding="utf-8") as f:
-                  # Se o arquivo acabou de ser criado (estava vazio), coloca um cabeçalho
-                  if len(existentes) == 0:
-                      f.write(f"# Lista gerada via TMDB em {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
-                  
-                  for t in novos_titulos:
-                      f.write(t + "\n")
-              print(f"💾 {len(novos_titulos)} filmes adicionados ao final do filmes.txt!")
-          else:
-              print("💤 Nenhum filme novo encontrado. O arquivo não foi alterado.")
+              existentes, texto = set(), ""
+              if os.path.exists(ARQ):
+                  with open(ARQ, "r", encoding="utf-8") as f:
+                      texto = f.read()
+                  existentes = {l.strip() for l in texto.splitlines() if l.strip() and not l.startswith("#")}
+
+              novos = [t for t in vistos if t not in existentes]
+              print(f"\n✅ TMDB retornou {len(vistos)} | já no arquivo: {len(existentes)} | novos: {len(novos)}")
+
+              if novos:
+                  with open(ARQ, "a", encoding="utf-8") as f:
+                      if not texto.strip():
+                          f.write(f"# Lista gerada via TMDB em {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
+                      elif not texto.endswith("\n"):
+                          f.write("\n")
+                      f.write("\n".join(novos) + "\n")
+                  print(f"💾 {len(novos)} filmes adicionados ao final de {ARQ}")
+              else:
+                  print("💤 Nada novo. Arquivo intacto.")
+
+              p = os.environ.get("GITHUB_STEP_SUMMARY")
+              if p:
+                  with open(p, "a", encoding="utf-8") as f:
+                      f.write(f"### TMDB ({MODO})\n- Anos: {len(anos)}\n- Retornados: {len(vistos)}\n"
+                              f"- Já existiam: {len(existentes)}\n- **Novos: {len(novos)}**\n")
+
+
+          if __name__ == "__main__":
+              main()
           PYEOF
+
+      - name: Gerar lista via TMDB (só adiciona, nunca apaga)
+        env:
+          TMDB_KEY: ${{ secrets.TMDB_API_KEY }}
+          MODO: ${{ inputs.modo || (github.event.schedule == '0 3 * * 0' && 'completo' || 'incremental') }}
+          ANO_MIN: ${{ inputs.ano_min || '' }}
+          ANO_MAX: ${{ inputs.ano_max || '' }}
+          VOTOS_MIN: ${{ inputs.votos_min || '' }}
+          PYTHONUNBUFFERED: "1"
+        run: python -u tmdb.py
 
       - name: Commit e push
         run: |
@@ -169,21 +206,19 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config pull.rebase true
           export GIT_EDITOR=true
-          git config --global core.editor "true"
-          
+          # listas compartilhadas: em conflito, junta as linhas das duas versões (nada se perde)
+          printf "%s\n" "titulos_encontrados.txt merge=union" "filmes.txt merge=union" >> .git/info/attributes
           git add filmes.txt
           if git diff --cached --quiet; then
-            echo "Nenhuma alteração em filmes.txt."
-            exit 0
+            echo "Nenhuma alteração."; exit 0
           fi
-          
-          git commit -m "chore: filmes.txt atualizado via TMDB (Append) [skip ci]"
-          
-          for i in 1 2 3; do
-            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "${GITHUB_REF_NAME}"; then
-              echo "✅ Push OK"
-              exit 0
+          git commit -m "chore: filmes.txt atualizado via TMDB [skip ci]"
+          for i in 1 2 3 4 5; do
+            # -X theirs no rebase = prevalece o que ESTA run gerou (o estado é só deste robô)
+            if git pull --rebase -X theirs origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME"; then
+              echo "✅ Push OK (tentativa $i)"; exit 0
             fi
-            sleep 5
+            git rebase --abort 2>/dev/null || true
+            echo "⚠️ Falhou, aguardando $((i*5))s..."; sleep $((i*5))
           done
           exit 1
