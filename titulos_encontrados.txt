@@ -4630,6 +4630,7 @@ TERROR ! Olhos Famintos 3 [ 2017 ]
 TERROR ! Olhos Famintos [ 2001 ]
 TERROR ! Pisque Duas Vezes [ 2024 ]
 TERROR ! Sem Saída .
+TERROR ! Um Estranho no Bosque .
 TERROR ! Um Lugar Silencioso_ Dia Um [ 2024 ].
 TERROR ! Vozes da Escuridão [ 2016 ]
 TERROR !Diabólica .
@@ -5708,6 +5709,7 @@ yokai 100 monsters
 𝑽iNi𝟕x👾 - Truque de Mestre [ 2013 ] ‧ Thriller/Crime
 𝑽iNi𝟕x👾 - Turno Maldito [ 2023 ] ‧ Terror/Suspense
 𝑽iNi𝟕x👾 - Um Dia [ 2011 ] ‧ Romance/Comédia
+𝑽iNi𝟕x👾 - Um Estranho no Bosque [ 2024 ]
 𝑽iNi𝟕x👾 - Um Lobisomem Americano em Londres [ 1981 ] ‧ Terror/Comédia
 𝑽iNi𝟕x👾 - Um Lugar Silencioso: Dia Um [ 2024 ] ‧ Terror/Ficção científica
 𝑽iNi𝟕x👾 - Ursinho Pooh: Sangue e Mel 2 [ 2024 ] - Terror/Crime
