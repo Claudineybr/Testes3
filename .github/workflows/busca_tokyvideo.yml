@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       limite:
-        description: 'Quantos vídeos processar NESTA execução (1-100)'
+        description: 'Quantos vídeos GERAR nesta execução (1-100)'
         type: number
         default: 50
         required: false
@@ -34,11 +34,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Instalar dependências
         run: |
@@ -48,12 +48,12 @@ jobs:
       - name: Criar script
         run: |
           cat << 'PYEOF' > tokyvideo.py
-          import os, re, json, time, sys, unicodedata
-          from datetime import datetime
+          import os, re, sys, json, time, hashlib, unicodedata
+          from datetime import datetime, timezone
+          from html import escape as esc
+          from urllib.parse import unquote
           from playwright.sync_api import sync_playwright
           from bs4 import BeautifulSoup
-          from html import escape as html_escape
-          from urllib.parse import unquote
 
           try:
               sys.stdout.reconfigure(line_buffering=True)
@@ -63,354 +63,383 @@ jobs:
           _orig_print = print
           def print(*args, **kwargs):
               kwargs.setdefault("flush", True)
-              ts = datetime.now().strftime("%H:%M:%S")
-              _orig_print(f"[{ts}]", *args, **kwargs)
+              _orig_print(f"[{datetime.now().strftime('%H:%M:%S')}]", *args, **kwargs)
 
-          LIMITE = int(os.environ.get("LIMITE", "50"))
-          RESETAR = os.environ.get("RESETAR", "").lower() == "true"
-          MIN_DURACAO = 40 * 60
-          ARQ_ESTADO = "tokyvideo_estado.json"
-          ARQ_TITULOS = "titulos_encontrados.txt"
+          # ───────────── configuração ─────────────
+          LIMITE       = max(1, int(os.environ.get("LIMITE") or 50))
+          RESETAR      = os.environ.get("RESETAR", "").lower() == "true"
+          MIN_DURACAO  = 40 * 60
+          LIMITE_SEG   = 5 * 3600
+          MAX_PAGINAS  = 100          # teto de segurança; o robô para sozinho quando a página vier vazia
+          MAX_FALHAS   = 3
+          INICIO       = time.time()
+          OUTDIR       = "tokyvideo"
+          ARQ_ESTADO   = "tokyvideo_estado.json"
+          ARQ_TITULOS  = "titulos_encontrados.txt"
+          URL_SERIES   = "https://www.tokyvideo.com/br/séries"
+          UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-          URL_SERIES_BASE = "https://www.tokyvideo.com/br/séries"
-
+          # ───────────── utilidades ─────────────
           def slugify(t):
-              t = unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
+              t = unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode("ascii")
               t = re.sub(r"[^\w\s-]", "", t).strip().lower()
               return re.sub(r"[-\s]+", "-", t)[:80] or "video"
 
+          def tempo_esgotado():
+              return (time.time() - INICIO) > LIMITE_SEG
+
+          def iso_dur(seg):
+              return f"PT{seg // 3600}H{(seg % 3600) // 60}M{seg % 60}S"
+
           def parse_duracao(texto):
-              if not texto: return 0
+              if not texto:
+                  return 0
               texto = str(texto).strip()
-              m = re.search(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', texto)
+              m = re.search(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", texto)
               if m and (m.group(1) or m.group(2) or m.group(3)):
-                  return int(m.group(1) or 0)*3600 + int(m.group(2) or 0)*60 + int(m.group(3) or 0)
-              if re.match(r'^\d+$', texto):
+                  return int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + int(m.group(3) or 0)
+              if re.match(r"^\d+$", texto):
                   v = int(texto)
-                  if 60 <= v <= 30000: return v
-              m = re.search(r'(\d+)\s*h\s*(\d+)\s*m', texto)
-              if m: return int(m.group(1))*3600 + int(m.group(2))*60
-              m = re.search(r'(\d+)\s*min', texto)
-              if m: return int(m.group(1))*60
-              m = re.search(r'(\d{1,2}):(\d{2}):(\d{2})', texto)
-              if m: return int(m.group(1))*3600 + int(m.group(2))*60 + int(m.group(3))
-              m = re.search(r'^(\d{1,3}):(\d{2})$', texto)
-              if m: return int(m.group(1))*60 + int(m.group(2))
-              m = re.search(r'^(\d+)\s*h$', texto)
-              if m: return int(m.group(1))*3600
+                  if 60 <= v <= 30000:
+                      return v
+              m = re.search(r"(\d+)\s*h\s*(\d+)\s*m", texto)
+              if m:
+                  return int(m.group(1)) * 3600 + int(m.group(2)) * 60
+              m = re.search(r"(\d+)\s*min", texto)
+              if m:
+                  return int(m.group(1)) * 60
+              m = re.search(r"(\d{1,2}):(\d{2}):(\d{2})", texto)
+              if m:
+                  return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+              m = re.search(r"^(\d{1,3}):(\d{2})$", texto)
+              if m:
+                  return int(m.group(1)) * 60 + int(m.group(2))
+              m = re.search(r"^(\d+)\s*h$", texto)
+              if m:
+                  return int(m.group(1)) * 3600
               return 0
 
-          def extrair_duracao_de_json(obj, prof=0):
-              if prof > 10: return 0
+          def duracao_de_json(obj, prof=0):
+              if prof > 10:
+                  return 0
               if isinstance(obj, dict):
                   for k, v in obj.items():
-                      kl = str(k).lower()
-                      if kl in ("duration", "length", "video_duration", "videoduration", "tempo"):
+                      if str(k).lower() in ("duration", "length", "video_duration", "videoduration", "tempo"):
                           if isinstance(v, (int, float)):
-                              if 60 <= v <= 30000: return int(v)
+                              if 60 <= v <= 30000:
+                                  return int(v)
                           elif isinstance(v, str):
                               d = parse_duracao(v)
-                              if d > 0: return d
-                      r = extrair_duracao_de_json(v, prof+1)
-                      if r > 0: return r
+                              if d > 0:
+                                  return d
+                      r = duracao_de_json(v, prof + 1)
+                      if r > 0:
+                          return r
               elif isinstance(obj, list):
                   for item in obj[:20]:
-                      r = extrair_duracao_de_json(item, prof+1)
-                      if r > 0: return r
+                      r = duracao_de_json(item, prof + 1)
+                      if r > 0:
+                          return r
               return 0
 
-          def obter_duracao_html(html, soup):
-              for script in soup.find_all("script", type="application/ld+json"):
+          def duracao_do_html(html, soup):
+              for sc in soup.find_all("script", type="application/ld+json"):
                   try:
-                      data = json.loads(script.string)
-                      d = extrair_duracao_de_json(data)
-                      if d > 0: return d
-                  except: pass
+                      d = duracao_de_json(json.loads(sc.string))
+                      if d > 0:
+                          return d
+                  except Exception:
+                      pass
               for m in soup.find_all("meta"):
                   if m.get("itemprop") == "duration" or m.get("property") == "og:video:duration":
                       d = parse_duracao(m.get("content"))
-                      if d > 0: return d
-              matches = re.findall(r'duration["\']?\s*[:=]\s*["\']?(\d+)', html, re.IGNORECASE)
-              for m in matches:
-                  d = int(m)
-                  if 60 <= d <= 30000: return d
+                      if d > 0:
+                          return d
+              for m in re.findall(r'duration["\']?\s*[:=]\s*["\']?(\d+)', html, re.IGNORECASE):
+                  if 60 <= int(m) <= 30000:
+                      return int(m)
               for sel in ["span.duration", "div.duration", ".video-duration", ".time-duration", "[itemprop='duration']"]:
                   el = soup.select_one(sel)
                   if el:
                       d = parse_duracao(el.get_text(strip=True))
-                      if d > 0: return d
-              texto_pagina = soup.get_text(" ", strip=True)
-              m = re.search(r'\b(\d{1,2}:\d{2}:\d{2})\b', texto_pagina)
+                      if d > 0:
+                          return d
+              m = re.search(r"\b(\d{1,2}:\d{2}:\d{2})\b", soup.get_text(" ", strip=True))
               if m:
                   d = parse_duracao(m.group(1))
-                  if d > 60: return d
+                  if d > 60:
+                      return d
               return 0
 
-          def gerar_html(titulo, thumb, link, outdir):
-              os.makedirs(outdir, exist_ok=True)
-              filename = os.path.join(outdir, slugify(titulo) + ".html")
-              json_ld = {
-                  "@context": "https://schema.org", "@type": "VideoObject",
-                  "supportPlatform": ["https://schema.org/IOSPlatform","https://schema.org/AndroidPlatform"],
-                  "name": titulo, "description": "Assista " + titulo,
-                  "thumbnailUrl": [thumb] if thumb else [], "contentUrl": link,
-              }
-              tpl = """<!DOCTYPE html>
+          # ───────────── HTML ─────────────
+          TPL = """<!DOCTYPE html>
           <html lang="pt-BR"><head><meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <script type="application/ld+json">{jl}</script>
-          <title>{t}</title>
-          <style>body{{background:#000;color:#fff;font-family:sans-serif;margin:0;padding:20px}}h1{{font-size:24px;text-align:center;margin-bottom:30px}}</style>
+          <title>__T__</title>
+          <meta name="description" content="__D__">
+          <meta property="og:title" content="__T__">
+          <meta property="og:image" content="__TH__">
+          <script type="application/ld+json">__JL__</script>
+          <style>body{background:#000;color:#fff;font-family:sans-serif;margin:0;padding:20px}h1{font-size:24px;text-align:center;margin-bottom:30px}</style>
           </head><body>
-          <h1>{t}</h1>
+          <h1>__T__</h1>
           <div style="background:#0b0b12;border-radius:20px;overflow:hidden;box-shadow:0 25px 60px rgba(0,0,0,.8);margin:25px 0;border:1px solid rgba(255,255,255,.06);">
-            <a href="{l}" target="_blank" style="display:block;position:relative;text-decoration:none;">
-              <img src="{th}" style="width:100%;display:block;">
+            <a href="__L__" target="_blank" rel="noopener" style="display:block;position:relative;text-decoration:none;">
+              <img src="__TH__" alt="__T__" loading="lazy" style="width:100%;display:block;">
               <div style="position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,0.7),transparent);"></div>
               <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:70px;height:70px;background:linear-gradient(135deg,#7a00ff,#c000ff);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 20px rgba(120,0,255,.6);color:white;font-size:26px;border:2px solid rgba(255,255,255,.2);">▶</div>
               <div style="position:absolute;top:12px;right:12px;background:#ff003c;padding:6px 12px;border-radius:20px;font-size:11px;color:#fff;font-weight:bold;">HD</div>
             </a>
           </div></body></html>"""
-              with open(filename, "w", encoding="utf-8") as f:
-                  f.write(tpl.format(jl=json.dumps(json_ld, ensure_ascii=False, indent=2),
-                                     t=html_escape(titulo), l=html_escape(link), th=html_escape(thumb)))
+
+          def caminho_unico(titulo, link):
+              base = os.path.join(OUTDIR, slugify(titulo))
+              p = base + ".html"
+              if os.path.exists(p):
+                  with open(p, "r", encoding="utf-8") as f:
+                      if esc(link) not in f.read():          # títulos repetidos ("Episódio 1") não se sobrescrevem
+                          p = f"{base}-{hashlib.md5(link.encode()).hexdigest()[:6]}.html"
+              return p
+
+          def gerar_html(titulo, thumb, link, dur):
+              os.makedirs(OUTDIR, exist_ok=True)
+              ld = {"@context": "https://schema.org", "@type": "VideoObject",
+                    "supportPlatform": ["https://schema.org/IOSPlatform", "https://schema.org/AndroidPlatform"],
+                    "name": titulo, "description": "Assista " + titulo,
+                    "thumbnailUrl": [thumb] if thumb else [], "contentUrl": link, "duration": iso_dur(dur),
+                    "uploadDate": datetime.now(timezone.utc).strftime("%Y-%m-%d")}
+              jl = json.dumps(ld, ensure_ascii=False, indent=2).replace("</", "<\\/")
+              html = (TPL.replace("__JL__", jl).replace("__T__", esc(titulo)).replace("__D__", esc("Assista " + titulo))
+                         .replace("__L__", esc(link)).replace("__TH__", esc(thumb)))
+              with open(caminho_unico(titulo, link), "w", encoding="utf-8") as f:
+                  f.write(html)
+
+          # ───────────── estado ─────────────
+          def estado_novo():
+              return {"processados": [], "falhas": {}, "pagina_colecao": 1, "colecoes_visitadas": [],
+                      "fila_links": [], "fim_colecoes": False}
 
           def carregar_estado():
-              if os.path.exists(ARQ_ESTADO):
-                  try:
-                      with open(ARQ_ESTADO, "r", encoding="utf-8") as f:
-                          est = json.load(f)
-                          if "fila_links" not in est: est["fila_links"] = []
-                          return est
-                  except Exception: pass
-              return {"processados": [], "falhas": {}, "pagina_colecao": 1, "colecoes_visitadas": [], "fila_links": []}
+              if not os.path.exists(ARQ_ESTADO):
+                  return estado_novo()
+              try:
+                  with open(ARQ_ESTADO, "r", encoding="utf-8") as f:
+                      est = json.load(f)
+              except Exception as e:                           # nunca zerar o histórico em silêncio
+                  sys.exit(f"❌ {ARQ_ESTADO} ilegível ({e}). Corrija o arquivo ou rode com 'resetar'.")
+              for k, v in estado_novo().items():
+                  est.setdefault(k, v)
+              return est
 
-          def salvar_estado(estado):
+          def salvar_estado(est):
               with open(ARQ_ESTADO, "w", encoding="utf-8") as f:
-                  json.dump(estado, f, ensure_ascii=False, indent=2)
+                  json.dump(est, f, ensure_ascii=False, indent=1)
+
+          # ───────────── páginas ─────────────
+          def rolar(page, rodadas=12, pausa=700):
+              ultimo = -1
+              for _ in range(rodadas):
+                  page.mouse.wheel(0, 6000)
+                  page.wait_for_timeout(pausa)
+                  h = page.evaluate("document.body.scrollHeight")
+                  if h == ultimo:
+                      break
+                  ultimo = h
 
           def extrair_colecoes(html, soup):
-              colecoes = set()
-              for a in soup.find_all("a", href=True):
-                  h = a["href"]
-                  if re.search(r'/br/s[ée]ries/[a-z0-9\-]+$', h, re.IGNORECASE):
-                      if re.search(r'/br/s[ée]ries/\d+$', h, re.IGNORECASE):
-                          continue
-                      lk = h if h.startswith("http") else "https://www.tokyvideo.com" + h
-                      colecoes.add(unquote(lk))
-              
-              raw_links = re.findall(r'href="(/br/s[ée]ries/[a-z0-9\-]+)"', html, re.IGNORECASE)
-              for h in raw_links:
-                  if re.search(r'/br/s[ée]ries/\d+$', h, re.IGNORECASE):
-                      continue
-                  lk = "https://www.tokyvideo.com" + h
-                  colecoes.add(unquote(lk))
-              
-              return colecoes
+              achadas = set()
+              hrefs = [a["href"] for a in soup.find_all("a", href=True)]
+              hrefs += re.findall(r'href="(/br/s[ée]ries/[^"#?]+)"', html, re.IGNORECASE)
+              for h in hrefs:
+                  if re.search(r"/br/s[ée]ries/[a-z0-9\-]+$", h, re.IGNORECASE) and not re.search(r"/br/s[ée]ries/\d+$", h, re.IGNORECASE):
+                      achadas.add(unquote(h if h.startswith("http") else "https://www.tokyvideo.com" + h))
+              return achadas
 
           def main():
-              estado = carregar_estado()
               if RESETAR:
                   print("🔄 RESETANDO histórico...")
-                  estado = {"processados": [], "falhas": {}, "pagina_colecao": 1, "colecoes_visitadas": [], "fila_links": []}
-                  salvar_estado(estado)
-
-              processados = set(estado.get("processados", []))
-              falhas = estado.get("falhas", {})
-              colecoes_visitadas = set(estado.get("colecoes_visitadas", []))
-              pagina_colecao = estado.get("pagina_colecao", 1)
-              fila_links = estado.get("fila_links", [])
+              est = estado_novo() if RESETAR else carregar_estado()
+              processados = set(est["processados"])
+              falhas = est["falhas"]
+              visitadas = set(est["colecoes_visitadas"])
+              fila = est["fila_links"]
+              pagina_colecao = est["pagina_colecao"]
+              fim = est["fim_colecoes"]
               encontrados = set()
-              videos_gerados = 0
+              gerados = verificados = paginas = 0
 
-              print(f"🎬 Tokyvideo — Meta: {LIMITE} vídeos")
-              print(f"📂 Histórico: {len(processados)} processados | {len(colecoes_visitadas)} coleções | Fila: {len(fila_links)} links")
+              def persistir():
+                  est.update(processados=sorted(processados), falhas=falhas, colecoes_visitadas=sorted(visitadas),
+                             pagina_colecao=pagina_colecao, fila_links=fila, fim_colecoes=fim)
+                  salvar_estado(est)
+
+              print(f"🎬 Tokyvideo — meta: {LIMITE} vídeos | processados: {len(processados)} | "
+                    f"coleções: {len(visitadas)} | fila: {len(fila)} | próxima página: {pagina_colecao}")
+
+              dur_rede = {"valor": 0}
+
+              def handler(resp):
+                  try:
+                      ct = resp.headers.get("content-type", "")
+                      if resp.status != 200 or not ("json" in ct or "javascript" in ct):
+                          return
+                      txt = resp.text()
+                      if len(txt) > 500000 or "duration" not in txt.lower():
+                          return
+                      try:
+                          d = duracao_de_json(json.loads(txt))
+                      except Exception:
+                          m = re.search(r'"duration"\s*:\s*"?(\d+|PT[\dHMS]+)"?', txt)
+                          d = parse_duracao(m.group(1)) if m else 0
+                      dur_rede["valor"] = max(dur_rede["valor"], d)
+                  except Exception:
+                      pass
 
               with sync_playwright() as p:
                   browser = p.chromium.launch(headless=True)
-                  context = browser.new_context(
-                      user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                  )
-                  page = context.new_page()
+                  ctx = browser.new_context(user_agent=UA, locale="pt-BR")
+                  # sem imagens/fontes/mídia: bem mais rápido (thumb vem do og:image, não precisa baixar)
+                  ctx.route("**/*", lambda r: r.abort() if r.request.resource_type in ("image", "font", "media") else r.continue_())
+                  page = ctx.new_page()
+                  page_v = ctx.new_page()
+                  page_v.on("response", handler)
 
-                  while videos_gerados < LIMITE:
-                      
-                      if not fila_links:
-                          if pagina_colecao > 37:
-                              print("\n🏁 Fim das 37 páginas. Nada mais a coletar.")
+                  while gerados < LIMITE and not tempo_esgotado():
+                      # ───── 1) abastecer a fila ─────
+                      if not fila:
+                          if fim or pagina_colecao > MAX_PAGINAS:
+                              print("🏁 Sem mais páginas de coleções.")
                               break
-                          
-                          if pagina_colecao == 1:
-                              url_pagina = URL_SERIES_BASE
-                          else:
-                              url_pagina = f"{URL_SERIES_BASE}/{pagina_colecao}"
-
-                          print(f"\n👥 Varrendo Página {pagina_colecao}/37 para encher a fila")
-                          
+                          url = URL_SERIES if pagina_colecao == 1 else f"{URL_SERIES}/{pagina_colecao}"
+                          print(f"\n👥 Varrendo página {pagina_colecao} das coleções")
                           try:
-                              page.goto(url_pagina, timeout=60000)
-                              page.wait_for_timeout(4000)
-                              
-                              for _ in range(8):
-                                  page.mouse.wheel(0, 6000)
-                                  page.wait_for_timeout(800)
-
-                              html = page.content()
-                              soup_p = BeautifulSoup(html, "html.parser")
-                              
-                              colecoes = extrair_colecoes(html, soup_p)
-                              colecoes_novas = colecoes - colecoes_visitadas
-                              
-                              print(f"  → {len(colecoes)} coleções encontradas, {len(colecoes_novas)} novas")
-
-                              for colecao in colecoes_novas:
+                              colecoes = set()
+                              for tentativa in range(2):
+                                  page.goto(url, timeout=60000, wait_until="domcontentloaded")
+                                  page.wait_for_timeout(3000)
+                                  rolar(page, 10, 800)
+                                  html = page.content()
+                                  colecoes = extrair_colecoes(html, BeautifulSoup(html, "html.parser"))
+                                  if colecoes:
+                                      break
+                              if not colecoes:
+                                  print("  ℹ️ Página sem coleções — fim da listagem.")
+                                  fim = True
+                                  persistir()
+                                  continue
+                              novas = sorted(colecoes - visitadas)
+                              print(f"  → {len(colecoes)} coleções, {len(novas)} novas")
+                              for col in novas:
+                                  if tempo_esgotado():
+                                      break
                                   try:
-                                      print(f"    🔍 Entrando: {colecao.split('/')[-1][:40]}")
-                                      page.goto(colecao, timeout=30000)
-                                      page.wait_for_timeout(2000)
-                                      
-                                      for _ in range(3):
-                                          page.mouse.wheel(0, 4000)
-                                          page.wait_for_timeout(800)
-                                      
-                                      soup_colecao = BeautifulSoup(page.content(), "html.parser")
-                                      
-                                      for a_v in soup_colecao.find_all("a", href=True):
-                                          if "/br/video/" in a_v["href"]:
-                                              lk_v = a_v["href"] if a_v["href"].startswith("http") else "https://www.tokyvideo.com" + a_v["href"]
-                                              if lk_v not in processados and falhas.get(lk_v, 0) < 3 and lk_v not in fila_links:
-                                                  fila_links.append(lk_v)
-                                      
-                                      colecoes_visitadas.add(colecao)
+                                      print(f"    🔍 {col.rstrip('/').split('/')[-1][:40]}")
+                                      page.goto(col, timeout=30000, wait_until="domcontentloaded")
+                                      page.wait_for_timeout(1500)
+                                      rolar(page, 10, 700)
+                                      soup_c = BeautifulSoup(page.content(), "html.parser")
+                                      for a in soup_c.find_all("a", href=True):
+                                          if "/br/video/" in a["href"]:
+                                              lk = (a["href"] if a["href"].startswith("http") else "https://www.tokyvideo.com" + a["href"]).split("#")[0]
+                                              if lk not in processados and falhas.get(lk, 0) < MAX_FALHAS and lk not in fila:
+                                                  fila.append(lk)
                                   except Exception as e:
-                                      print(f"    ⚠️ Erro: {str(e)[:40]}")
-                                      colecoes_visitadas.add(colecao)
-
-                              pagina_colecao += 1
-                              estado["fila_links"] = fila_links
-                              estado["pagina_colecao"] = pagina_colecao
-                              estado["colecoes_visitadas"] = list(colecoes_visitadas)
-                              salvar_estado(estado)
-                              
-                              print(f"  ✅ Fila abastecida com {len(fila_links)} links. Próxima página: {pagina_colecao}")
-
-                          except Exception as e:
-                              print(f"  ⚠️ Erro ao acessar página: {str(e)[:60]}")
-                              pagina_colecao += 1
-                              estado["pagina_colecao"] = pagina_colecao
-                              salvar_estado(estado)
-                              continue
-
-                      print(f"\n🎞️  Processando fila... ({len(fila_links)} links restantes)")
-                      
-                      while fila_links and videos_gerados < LIMITE:
-                          href = fila_links[0]
-                          
-                          page_v = context.new_page()
-                          duracao_rede = {"valor": 0}
-
-                          def handler(resp):
-                              try:
-                                  ct = resp.headers.get("content-type", "")
-                                  if "json" in ct or "javascript" in ct:
-                                      if resp.status == 200:
-                                          txt = resp.text()
-                                          if len(txt) > 500000: return
-                                          if "duration" in txt.lower():
-                                              try:
-                                                  data = json.loads(txt)
-                                                  d = extrair_duracao_de_json(data)
-                                                  if d > duracao_rede["valor"]: duracao_rede["valor"] = d
-                                              except:
-                                                  m = re.search(r'"duration"\s*:\s*"?(\d+|PT[\dHMS]+)"?', txt)
-                                                  if m:
-                                                      d = parse_duracao(m.group(1))
-                                                      if d > duracao_rede["valor"]: duracao_rede["valor"] = d
-                              except: pass
-
-                          page_v.on("response", handler)
-
-                          try:
-                              page_v.goto(href, timeout=30000, wait_until="domcontentloaded")
-                              try: page_v.wait_for_load_state("networkidle", timeout=10000)
-                              except: pass
-                              page_v.wait_for_timeout(1000)
-
-                              conteudo = page_v.content()
-                              soup_v = BeautifulSoup(conteudo, "html.parser")
-
-                              titulo = ""
-                              og_title = soup_v.find("meta", property="og:title")
-                              if og_title: titulo = og_title.get("content", "").strip()
-                              if not titulo:
-                                  h1 = soup_v.find("h1")
-                                  if h1: titulo = h1.get_text(strip=True)
-                              if not titulo: titulo = page_v.title().replace(" - Tokyvideo", "").strip()
-
-                              titulo = re.sub(r"^Assistir\s+['\"]?|['\"]?\s+Filme.*$", "", titulo, flags=re.IGNORECASE).strip()
-                              titulo = re.sub(r"\s*\|.*$", "", titulo).strip()
-
-                              dur = duracao_rede["valor"] if duracao_rede["valor"] > 0 else obter_duracao_html(conteudo, soup_v)
-
-                              if dur < MIN_DURACAO:
-                                  if dur == 0:
-                                      falhas[href] = falhas.get(href, 0) + 1
-                                      print(f"  ❓ {titulo[:40]}... (0min - {falhas[href]}/3)")
-                                  else:
-                                      processados.add(href)
+                                      print(f"    ⚠️ {str(e)[:60]}")
+                                  visitadas.add(col)
                               else:
-                                  thumb = ""
-                                  og = soup_v.find("meta", property="og:image")
-                                  if og: thumb = og.get("content", "")
-
-                                  gerar_html(titulo, thumb, href, "tokyvideo") # ⭐ PASTA TOKYVIDEO
-                                  encontrados.add(titulo)
-                                  processados.add(href)
-                                  if href in falhas: del falhas[href]
-                                  videos_gerados += 1
-                                  print(f"  ✅ {titulo[:50]} ({dur//60}min)")
-
+                                  pagina_colecao += 1               # só avança se varreu todas as coleções
+                              paginas += 1
+                              persistir()
+                              print(f"  ✅ Fila com {len(fila)} links")
                           except Exception as e:
-                              falhas[href] = falhas.get(href, 0) + 1
-                              print(f"  ⚠️ erro: {str(e)[:30]} ({falhas[href]}/3)")
-                          finally:
-                              page_v.close()
-                              
-                              fila_links.pop(0)
-                              estado["fila_links"] = fila_links
-                              estado["processados"] = list(processados)
-                              estado["falhas"] = falhas
-                              salvar_estado(estado)
+                              print(f"  ⚠️ Erro na página: {str(e)[:70]}")
+                              pagina_colecao += 1
+                              persistir()
+                          continue
 
-                  context.close()
+                      # ───── 2) processar um vídeo ─────
+                      href = fila.pop(0)
+                      verificados += 1
+                      falhou = False
+                      dur_rede["valor"] = 0
+                      try:
+                          page_v.goto(href, timeout=30000, wait_until="domcontentloaded")
+                          try:
+                              page_v.wait_for_load_state("networkidle", timeout=10000)
+                          except Exception:
+                              pass
+                          page_v.wait_for_timeout(800)
+                          conteudo = page_v.content()
+                          soup = BeautifulSoup(conteudo, "html.parser")
+
+                          titulo = ""
+                          og = soup.find("meta", property="og:title")
+                          if og:
+                              titulo = (og.get("content") or "").strip()
+                          if not titulo:
+                              h1 = soup.find("h1")
+                              titulo = h1.get_text(strip=True) if h1 else ""
+                          if not titulo:
+                              titulo = page_v.title().replace(" - Tokyvideo", "").strip()
+                          titulo = re.sub(r"^Assistir\s+['\"]?|['\"]?\s+Filme.*$", "", titulo, flags=re.IGNORECASE).strip()
+                          titulo = re.sub(r"\s*\|.*$", "", titulo).strip()
+
+                          dur = dur_rede["valor"] or duracao_do_html(conteudo, soup)
+                          if dur == 0:
+                              falhou = True
+                              print(f"  ❓ {titulo[:40]}… sem duração")
+                          elif dur < MIN_DURACAO:
+                              processados.add(href)
+                          else:
+                              ti = soup.find("meta", property="og:image")
+                              thumb = (ti.get("content") or "") if ti else ""
+                              gerar_html(titulo, thumb, href, dur)
+                              encontrados.add(titulo)
+                              processados.add(href)
+                              falhas.pop(href, None)
+                              gerados += 1
+                              print(f"  ✅ {titulo[:50]} ({dur // 60}min) [{gerados}/{LIMITE}]")
+                      except Exception as e:
+                          falhou = True
+                          print(f"  ⚠️ {str(e)[:50]}")
+
+                      if falhou:
+                          n = falhas.get(href, 0) + 1
+                          if n < MAX_FALHAS:
+                              falhas[href] = n
+                              fila.append(href)                     # volta pro fim da fila (antes se perdia)
+                          else:
+                              falhas.pop(href, None)
+                              processados.add(href)
+                      if verificados % 10 == 0:
+                          persistir()
+
+                  ctx.close()
                   browser.close()
 
-              estado["processados"] = list(processados)
-              estado["falhas"] = falhas
-              estado["colecoes_visitadas"] = list(colecoes_visitadas)
-              estado["pagina_colecao"] = pagina_colecao
-              estado["fila_links"] = fila_links
-              salvar_estado(estado)
-
-              titulos_antigos = set()
+              persistir()
+              antigos = set()
               if os.path.exists(ARQ_TITULOS):
                   with open(ARQ_TITULOS, "r", encoding="utf-8") as f:
-                      titulos_antigos = {l.strip() for l in f if l.strip()}
-              titulos_antigos.update(encontrados)
+                      antigos = {l.strip() for l in f if l.strip()}
+              antigos |= encontrados
               with open(ARQ_TITULOS, "w", encoding="utf-8") as f:
-                  for t in sorted(titulos_antigos):
-                      f.write(t + "\n")
+                  f.write("".join(t + "\n" for t in sorted(antigos)))
 
-              print(f"\n══════════ RESUMO ══════════")
-              print(f"Novos HTMLs: {videos_gerados}")
-              print(f"Coleções visitadas: {len(colecoes_visitadas)} | Próxima página: {pagina_colecao}")
-              print(f"Links restantes na fila: {len(fila_links)}")
-              print("════════════════════════════")
+              tem_mais = bool(fila) or (not fim and pagina_colecao <= MAX_PAGINAS)
+              progresso = verificados + paginas > 0                # evita auto-chain infinito sem avanço
+              open("/tmp/faltam.txt", "w").write("1" if tem_mais and progresso else "0")
 
-              if pagina_colecao <= 37 or len(fila_links) > 0:
-                  with open("/tmp/faltam.txt", "w") as f: f.write("1")
-              else:
-                  with open("/tmp/faltam.txt", "w") as f: f.write("0")
+              print("\n══════════ RESUMO ══════════")
+              print(f"HTMLs novos: {gerados} | verificados: {verificados} | coleções: {len(visitadas)} | fila: {len(fila)}")
+              p = os.environ.get("GITHUB_STEP_SUMMARY")
+              if p:
+                  with open(p, "a", encoding="utf-8") as f:
+                      f.write(f"### Tokyvideo\n- HTMLs novos: **{gerados}**\n- Vídeos verificados: {verificados}\n"
+                              f"- Coleções visitadas: {len(visitadas)}\n- Fila restante: {len(fila)}\n"
+                              f"- Listagem terminou: {'sim' if fim else 'não'}\n")
+
 
           if __name__ == "__main__":
               main()
@@ -420,109 +449,51 @@ jobs:
         env:
           LIMITE: ${{ inputs.limite || 50 }}
           RESETAR: ${{ inputs.resetar || 'false' }}
-        run: python tokyvideo.py
+          PYTHONUNBUFFERED: "1"
+        run: python -u tokyvideo.py
 
-      - name: Commit e push (com merge inteligente)
+      - name: Commit e push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config pull.rebase true
-          
           export GIT_EDITOR=true
-          git config --global core.editor "true"
-          
+          # listas compartilhadas: em conflito, junta as linhas das duas versões (nada se perde)
+          printf "%s\n" "titulos_encontrados.txt merge=union" "filmes.txt merge=union" >> .git/info/attributes
           mkdir -p tokyvideo
-          touch tokyvideo_estado.json titulos_encontrados.txt
-          git add tokyvideo/ tokyvideo_estado.json titulos_encontrados.txt # ⭐ ADD TOKYVIDEO
+          git add tokyvideo/ tokyvideo_estado.json titulos_encontrados.txt
           if git diff --cached --quiet; then
-            echo "Nenhuma alteração."
-            exit 0
+            echo "Nenhuma alteração."; exit 0
           fi
-
-          git commit -m "chore: Tokyvideo Coleções — novos vídeos [skip ci]"
-
+          git commit -m "chore: Tokyvideo — novos vídeos [skip ci]"
           for i in 1 2 3 4 5; do
-            echo "→ Push tentativa $i..."
-            
-            if git pull --rebase origin "${GITHUB_REF_NAME}"; then
-              if git push origin "${GITHUB_REF_NAME}"; then
-                echo "✅ Push OK na tentativa $i."
-                exit 0
-              fi
-            else
-              echo "⚠️ Conflito detectado! Resolvendo automaticamente..."
-              python - <<'EOF'
-          import json, os
-
-          if os.path.exists("tokyvideo_estado.json"):
-              try:
-                  with open("tokyvideo_estado.json", "r", encoding="utf-8") as f:
-                      local = json.load(f)
-              except:
-                  local = {"processados": [], "falhas": {}, "pagina_colecao": 1, "colecoes_visitadas": [], "fila_links": []}
-              
-              with open("tokyvideo_estado.json", "w", encoding="utf-8") as f:
-                  json.dump(local, f, ensure_ascii=False, indent=2)
-
-          if os.path.exists("titulos_encontrados.txt"):
-              with open("titulos_encontrados.txt", "r", encoding="utf-8") as f:
-                  linhas = f.read().splitlines()
-              titulos = set(l.strip() for l in linhas if l.strip() and not l.startswith(("<<<<<<<", "=======", ">>>>>>>")))
-              with open("titulos_encontrados.txt", "w", encoding="utf-8") as f:
-                  for t in sorted(titulos):
-                      f.write(t + "\n")
-          EOF
-              
-              git add tokyvideo_estado.json titulos_encontrados.txt
-              
-              GIT_EDITOR=true git rebase --continue
-              
-              if git push origin "${GITHUB_REF_NAME}"; then
-                echo "✅ Push OK após resolução de conflito."
-                exit 0
-              fi
+            # -X theirs no rebase = prevalece o que ESTA run gerou (o estado é só deste robô)
+            if git pull --rebase -X theirs origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME"; then
+              echo "✅ Push OK (tentativa $i)"; exit 0
             fi
-            
-            echo "⚠️  Falhou, aguardando $((i*5))s..."
-            sleep $((i*5))
+            git rebase --abort 2>/dev/null || true
+            echo "⚠️ Falhou, aguardando $((i*5))s..."; sleep $((i*5))
           done
           exit 1
 
-      - name: Disparar próxima run (se fila não vazia)
-        if: |
-          success() && (
-            github.event_name == 'schedule' ||
-            inputs.auto_run == true ||
-            inputs.auto_run == 'true'
-          )
+      - name: Disparar próxima run
+        if: success() && (github.event_name == 'schedule' || inputs.auto_run == true || inputs.auto_run == 'true')
         env:
-          GH_TOKEN: ${{ secrets.PAT_CHAIN }}
+          # PAT_CHAIN é opcional: sem ele usa o GITHUB_TOKEN (que pode disparar workflow_dispatch)
+          GH_TOKEN: ${{ secrets.PAT_CHAIN || github.token }}
           REPO: ${{ github.repository }}
           LIMITE_IN: ${{ inputs.limite || 50 }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "⚠️  PAT_CHAIN não configurado: sem auto-chain."
-            exit 0
-          fi
           FALTAM=$(cat /tmp/faltam.txt 2>/dev/null || echo 0)
-          echo "📊 Faltam páginas/vídeos: $FALTAM"
-          if [ "${FALTAM:-0}" -le 0 ]; then
-            echo "✅ Fila concluída — não vou disparar mais nada."
-            exit 0
-          fi
-          LIMITE_ISO=$(date -u -d '60 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
-          RECENTES=$(gh run list --workflow="busca_tokyvideo.yml" --event workflow_dispatch --limit 100 \
-            --json createdAt --jq "[.[] | select(.createdAt > \"$LIMITE_ISO\")] | length" \
-            --repo "$REPO" 2>/dev/null || echo 0)
-          echo "🔁 Encadeamentos na última hora: $RECENTES"
-          if [ "${RECENTES:-0}" -ge 20 ]; then
-            echo "🛑 Limite de 20 runs/hora atingido — parando auto-chain."
-            exit 0
-          fi
-          echo "🚀 Disparando próxima run (limite=$LIMITE_IN)..."
-          sleep 30
-          gh workflow run "busca_tokyvideo.yml" --repo "$REPO" --ref "${GITHUB_REF_NAME}" \
-            -f auto_run=true \
-            -f limite="${LIMITE_IN}" \
-            -f resetar=false
+          echo "📊 Faltam: $FALTAM"
+          if [ "${FALTAM:-0}" -le 0 ]; then echo "✅ Nada mais a processar."; exit 0; fi
+          WF="$(basename "${GITHUB_WORKFLOW_REF%%@*}")"
+          DESDE=$(date -u -d "60 minutes ago" +%Y-%m-%dT%H:%M:%SZ)
+          RECENTES=$(gh run list --repo "$REPO" --workflow "$WF" --limit 100 --json createdAt \
+            --jq "[.[] | select(.createdAt > \"$DESDE\")] | length" 2>/dev/null || echo 0)
+          echo "🔁 Runs na última hora: $RECENTES"
+          if [ "${RECENTES:-0}" -ge 30 ]; then echo "🛑 Limite de runs/hora atingido."; exit 0; fi
+          sleep 20
+          gh workflow run "$WF" --repo "$REPO" --ref "$GITHUB_REF_NAME" \
+            -f auto_run=true -f limite="$LIMITE_IN" -f resetar=false
           echo "✅ Próxima run disparada."
