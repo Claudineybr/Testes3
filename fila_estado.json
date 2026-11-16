@@ -1,7 +1,9 @@
 {
- "cursor": 14000,
+ "cursor": 14500,
  "extras": [],
- "retry": {},
- "execucoes": 14000,
- "ultima_execucao": "2026-11-16T03:01:12.074624+00:00"
+ "retry": {
+  "Corra que a Polícia Vem Aí! 33⅓: O Insulto Final (1994)": 1
+ },
+ "execucoes": 14500,
+ "ultima_execucao": "2026-11-16T03:04:15.753405+00:00"
 }
