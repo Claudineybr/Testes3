@@ -871,6 +871,7 @@ AÇÃO : O Procurado .
 AÇÃO : O Punho do Condor.
 AÇÃO : Quebrando Regras .
 AÇÃO : Quebrando Regras 3_ Não Se Rendam .
+AÇÃO : Treinado Para Matar.
 AÇÃO _ Mad Max - Além da Cúpula do Trovão .
 AÇÃO! Armadilha em Alto Mar .
 AÇÃO/ DRAMA ! Star Wars_ Os Últimos Jedi [ 2017 ]
@@ -4723,6 +4724,7 @@ TERROR : A Sombra do Mal .
 TERROR : A Última Casa .
 TERROR : Aquelas Que Vocês Não Queimaram .
 TERROR : Demônio Entre Nós .
+TERROR : O Covil [ 2021 ]
 TERROR : O Grito 2 .
 TERROR : O Grito 3 .
 TERROR : O Inquilino .
@@ -5831,12 +5833,14 @@ yokai 100 monsters
 𝑽iNi𝟕x👾 - Todo Mundo em Pânico 4 [ 2006 ] ‧ Comédia/Comédia de terror
 𝑽iNi𝟕x👾 - Todo Mundo em Pânico 5 [ 2013 ] ‧ Terror/Comédia
 𝑽iNi𝟕x👾 - Todo Mundo em Pânico [ 2000 ] ‧ Comédia/Terror
+𝑽iNi𝟕x👾 - Treinado Para Matar [ 2021 ] ‧ Ação/Thriller
 𝑽iNi𝟕x👾 - Truque de Mestre [ 2013 ] ‧ Thriller/Crime
 𝑽iNi𝟕x👾 - Turno Maldito [ 2023 ] ‧ Terror/Suspense
 𝑽iNi𝟕x👾 - Um Dia [ 2011 ] ‧ Romance/Comédia
 𝑽iNi𝟕x👾 - Um Estranho no Bosque [ 2024 ]
 𝑽iNi𝟕x👾 - Um Lobisomem Americano em Londres [ 1981 ] ‧ Terror/Comédia
 𝑽iNi𝟕x👾 - Um Lugar Silencioso: Dia Um [ 2024 ] ‧ Terror/Ficção científica
+𝑽iNi𝟕x👾 - Uma Noite no Inferno [ 2021 ] ‧ Terror/Mistério
 𝑽iNi𝟕x👾 - Ursinho Pooh: Sangue e Mel 2 [ 2024 ] - Terror/Crime
 𝑽iNi𝟕x👾 - Ursinho Pooh: Sangue e Mel [ 2023 ] ‧ Terror/Crime
 𝑽iNi𝟕x👾 - Viúva Negra [ 2021 ] ‧ Ação/Ficção científica
