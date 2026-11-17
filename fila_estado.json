@@ -1,9 +1,7 @@
 {
- "cursor": 33391,
+ "cursor": 33590,
  "extras": [],
- "retry": {
-  "18½ (2022)": 2
- },
- "execucoes": 33400,
- "ultima_execucao": "2026-11-17T01:51:12.876806+00:00"
+ "retry": {},
+ "execucoes": 33600,
+ "ultima_execucao": "2026-11-17T01:54:13.686850+00:00"
 }
