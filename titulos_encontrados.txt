@@ -860,6 +860,7 @@ AÇÃO /FICÇÃO ! Homem-Formiga e a Vespa_ Quantumania [ 2023 ]
 AÇÃO /FICÇÃO ! Pantera Negra_ Wakanda Para Sempre [ 2022 ]
 AÇÃO /FICÇÃO ! Thor_ O Mundo Sombrio [ 2013 ]
 AÇÃO /FICÇÃO ! Vingadores Ultimato [ 2019 ]
+AÇÃO : Anjo da morte .
 AÇÃO : Boyka , O Imbatível .
 AÇÃO : Carga Explosiva ! O Legado .
 AÇÃO : Carga Explosiva 1.
@@ -5981,6 +5982,7 @@ yokai 100 monsters
 𝑽iNi𝟕x👾 - O Imbatível III: Redenção [ 2010 ] ‧ Ação/Esporte
 𝑽iNi𝟕x👾 - O Imbatível [ 2002 ] ‧ Ação/Esporte
 𝑽iNi𝟕x👾 - O Incrível Hulk [ 2008 ] ‧ Ação/Ficção científica
+𝑽iNi𝟕x👾 - O Inquilino [ 2009 ] ‧ Terror/Mistério
 𝑽iNi𝟕x👾 - O Massacre da Serra Elétrica - O Início [ 2006 ] ‧ Terror/Crime
 𝑽iNi𝟕x👾 - O Mundo Imaginário do Dr. Parnassus [ 2009 ] ‧ Aventura/Fantasia
 𝑽iNi𝟕x👾 - O Padrasto [ 2009 ] ‧ Terror/Suspense psicológico
