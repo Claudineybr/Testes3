@@ -1,7 +1,9 @@
 {
- "cursor": 67788,
+ "cursor": 67988,
  "extras": [],
- "retry": {},
- "execucoes": 67800,
- "ultima_execucao": "2026-11-19T00:23:53.102167+00:00"
+ "retry": {
+  "Symbiopsychotaxiplasm: Take 2½ (2005)": 1
+ },
+ "execucoes": 68000,
+ "ultima_execucao": "2026-11-19T00:25:37.756312+00:00"
 }
