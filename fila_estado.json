@@ -1,7 +1,9 @@
 {
- "cursor": 94182,
+ "cursor": 94382,
  "extras": [],
- "retry": {},
- "execucoes": 94200,
- "ultima_execucao": "2026-11-20T23:42:06.228959+00:00"
+ "retry": {
+  "007½ no Carnaval (1966)": 1
+ },
+ "execucoes": 94400,
+ "ultima_execucao": "2026-11-20T23:44:07.370373+00:00"
 }
