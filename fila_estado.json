@@ -1,9 +1,7 @@
 {
- "cursor": 86783,
+ "cursor": 86982,
  "extras": [],
- "retry": {
-  "Duck Dodgers and the Return of the 24½th Century (1980)": 2
- },
- "execucoes": 86800,
- "ultima_execucao": "2026-11-20T00:54:08.834590+00:00"
+ "retry": {},
+ "execucoes": 87000,
+ "ultima_execucao": "2026-11-20T00:55:54.535461+00:00"
 }
