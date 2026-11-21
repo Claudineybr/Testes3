@@ -1,9 +1,7 @@
 {
- "cursor": 102579,
+ "cursor": 102778,
  "extras": [],
- "retry": {
-  "The Fighting 69½th (1941)": 2
- },
- "execucoes": 102600,
- "ultima_execucao": "2026-11-21T01:08:34.016942+00:00"
+ "retry": {},
+ "execucoes": 102800,
+ "ultima_execucao": "2026-11-21T01:10:20.838149+00:00"
 }
