@@ -1,0 +1,12 @@
+Resumo dos filmes em Portugês (PT-BR)
+Total: 448 títulos únicos
+
+Origem:
+- tankie/: 157 dublado + 1 legendado = 158
+- tokyvideo/: 248 dublado + 43 legendado = 291
+
+Legenda:
+- 'Dublado': áudio em português
+- 'Legendado': legendas em português
+
+Arquivos:
